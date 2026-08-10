@@ -66,8 +66,9 @@ run automatically on push or tag - see
 It builds the image and pushes it to GitHub Container Registry at
 `ghcr.io/krelinga/linear-todoist-sync`, tagged with the `major`,
 `major.minor`, and `major.minor.patch` versions read from `package.json` at
-run time (e.g. `:0`, `:0.1`, `:0.1.0`) - so it always reflects whatever
-version is on `main` when you run it, not the commit that triggered it.
+run time (e.g. `:0`, `:0.1`, `:0.1.0`), plus `:latest` - so it always
+reflects whatever version is on `main` when you run it, not the commit that
+triggered it.
 
 ## Observability
 

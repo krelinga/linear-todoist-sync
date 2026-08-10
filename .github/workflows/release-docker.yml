@@ -49,6 +49,7 @@ jobs:
             ${{ steps.image.outputs.name }}:${{ steps.version.outputs.major }}
             ${{ steps.image.outputs.name }}:${{ steps.version.outputs.minor }}
             ${{ steps.image.outputs.name }}:${{ steps.version.outputs.full }}
+            ${{ steps.image.outputs.name }}:latest
           labels: |
             org.opencontainers.image.version=${{ steps.version.outputs.full }}
             org.opencontainers.image.revision=${{ github.sha }}
