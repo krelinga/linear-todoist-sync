@@ -67,3 +67,24 @@ export type UpdateProjectInput = {
   name?: string;
   description?: string;
 };
+
+/** A started Linear issue paired with whatever this service already knows about it (§5 step 3). */
+export type IssueMapping = {
+  issue: LinearIssueSummary;
+  /** Found by matching the issue's URL against a marked Todoist project's description (§5.4). */
+  matchedProject: TodoistProjectSummary | null;
+  /** This service's own marker attachment on the issue, if one currently exists (§5.4). */
+  attachment: LinearAttachmentSummary | null;
+};
+
+/** A marked Todoist project with no started Linear issue currently pointing at it (§5.1/§5.2). */
+export type OrphanedProject = {
+  project: TodoistProjectSummary;
+  /** The linked issue's current state, or null if that issue no longer exists at all. */
+  linkedIssue: LinearIssueSummary | null;
+};
+
+export type Snapshot = {
+  mappings: IssueMapping[];
+  orphans: OrphanedProject[];
+};
