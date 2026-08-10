@@ -57,7 +57,7 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
   }
 }
 
-function extractStatus(error: unknown): number | undefined {
+export function extractHttpStatus(error: unknown): number | undefined {
   if (typeof error !== 'object' || error === null) {
     return undefined;
   }
@@ -108,7 +108,7 @@ function extractRetryAfterSeconds(error: unknown): number | undefined {
  * produced by fetch-based HTTP clients).
  */
 export function httpRetryClassifier(error: unknown): RetryClassification {
-  const status = extractStatus(error);
+  const status = extractHttpStatus(error);
   if (status === undefined || (status !== 429 && status < 500)) {
     return { retryable: false };
   }
