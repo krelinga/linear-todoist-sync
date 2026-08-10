@@ -1,4 +1,5 @@
 import { extractHttpStatus, httpRetryClassifier, withRetry } from '../retry.js';
+import { isMarkerAttachment } from '../naming.js';
 import type { Metrics } from '../metrics.js';
 import type {
   CreateAttachmentInput,
@@ -6,9 +7,6 @@ import type {
   LinearIssueSummary,
   UpdateAttachmentInput,
 } from '../types.js';
-
-/** Marker used to recognize this service's own attachment cards during discovery (§6.1). */
-const SYNC_APP_MARKER = 'linear-todoist-sync';
 
 // --- Minimal structural shapes of the parts of @linear/sdk this service reads. Kept narrow
 // and separate from the SDK's own classes so a plain fake object can implement them in tests;
@@ -149,7 +147,7 @@ export class LinearClient implements LinearPort {
       return null;
     }
     const { nodes } = await this.call(() => issue.attachments());
-    const marker = nodes.find((attachment) => attachment.metadata['syncApp'] === SYNC_APP_MARKER);
+    const marker = nodes.find((attachment) => isMarkerAttachment(attachment.metadata));
     return marker ? toAttachmentSummary(marker) : null;
   }
 
@@ -197,5 +195,3 @@ export class LinearClient implements LinearPort {
     await this.call(() => this.sdk.createComment({ issueId, body }));
   }
 }
-
-export { SYNC_APP_MARKER };

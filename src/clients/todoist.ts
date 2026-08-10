@@ -1,4 +1,5 @@
 import { extractHttpStatus, httpRetryClassifier, withRetry } from '../retry.js';
+import { LINKED_ISSUE_MARKER_PREFIX } from '../naming.js';
 import type { Metrics } from '../metrics.js';
 import type {
   CreateProjectInput,
@@ -8,9 +9,6 @@ import type {
   TodoistTaskSummary,
   UpdateProjectInput,
 } from '../types.js';
-
-/** Marker prefix used to recognize this service's own projects during discovery (§6.2). */
-const LINKED_ISSUE_MARKER_PREFIX = 'Linked Linear issue: ';
 
 // --- Minimal structural shapes of the parts of @doist/todoist-sdk this service reads/writes.
 // Kept narrow so a plain fake object can implement them in tests; a real TodoistApi instance
@@ -218,5 +216,3 @@ export class TodoistClient implements TodoistPort {
     await this.call(() => this.sdk.addComment({ projectId, content }));
   }
 }
-
-export { LINKED_ISSUE_MARKER_PREFIX };
