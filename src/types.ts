@@ -30,3 +30,40 @@ export type UpdateAttachmentInput = {
   subtitle?: string;
   metadata?: Record<string, unknown>;
 };
+
+/** A Todoist project, normalized to the fields this service actually needs. */
+export type TodoistProjectSummary = {
+  id: string;
+  name: string;
+  url: string;
+  description: string;
+  isArchived: boolean;
+};
+
+export type TodoistTaskSummary = {
+  id: string;
+  content: string;
+  sectionId: string | null;
+};
+
+export type TodoistCompletedTaskSummary = {
+  content: string;
+  completedAt: string;
+  sectionId: string | null;
+};
+
+export type TodoistSectionSummary = {
+  id: string;
+  name: string;
+  order: number;
+};
+
+export type CreateProjectInput = {
+  name: string;
+  description: string;
+};
+
+export type UpdateProjectInput = {
+  name?: string;
+  description?: string;
+};
