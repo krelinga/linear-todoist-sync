@@ -19,6 +19,7 @@ export interface RawWorkflowState {
 export interface RawAttachment {
   id: string;
   url: string;
+  title: string;
   subtitle?: string | null;
   metadata: Record<string, unknown>;
 }
@@ -80,6 +81,7 @@ function toAttachmentSummary(attachment: RawAttachment): LinearAttachmentSummary
   return {
     id: attachment.id,
     url: attachment.url,
+    title: attachment.title,
     subtitle: attachment.subtitle ?? null,
     metadata: attachment.metadata,
   };

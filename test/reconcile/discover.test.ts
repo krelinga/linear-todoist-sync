@@ -35,6 +35,7 @@ function attachment(overrides: Partial<LinearAttachmentSummary> = {}): LinearAtt
   return {
     id: 'att-1',
     url: 'https://todoist.com/showProject?id=proj-1',
+    title: '[ENG-1] Fix the thing',
     subtitle: '2 tasks outstanding',
     metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
     ...overrides,

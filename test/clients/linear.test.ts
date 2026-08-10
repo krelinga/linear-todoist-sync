@@ -139,12 +139,14 @@ describe('LinearClient', () => {
       const other: RawAttachment = {
         id: 'att-other',
         url: 'https://github.com/acme/repo/pull/1',
+        title: 'PR #1',
         subtitle: null,
         metadata: {},
       };
       const marker: RawAttachment = {
         id: 'att-marker',
         url: 'https://todoist.com/showProject?id=123',
+        title: '[ENG-1] Fix the thing',
         subtitle: '3 tasks outstanding',
         metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
       };
@@ -163,6 +165,7 @@ describe('LinearClient', () => {
       expect(result).toEqual({
         id: 'att-marker',
         url: 'https://todoist.com/showProject?id=123',
+        title: '[ENG-1] Fix the thing',
         subtitle: '3 tasks outstanding',
         metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
       });
@@ -186,6 +189,7 @@ describe('LinearClient', () => {
       const attachment: RawAttachment = {
         id: 'att-1',
         url: 'https://todoist.com/showProject?id=123',
+        title: '[ENG-1] Fix the thing',
         subtitle: null,
         metadata: { syncApp: 'linear-todoist-sync' },
       };

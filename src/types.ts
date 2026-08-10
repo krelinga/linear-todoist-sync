@@ -12,6 +12,7 @@ export type LinearIssueSummary = {
 export type LinearAttachmentSummary = {
   id: string;
   url: string;
+  title: string;
   subtitle: string | null;
   metadata: Record<string, unknown>;
 };
