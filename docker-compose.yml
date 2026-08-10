@@ -1,0 +1,13 @@
+services:
+  linear-todoist-sync:
+    build: .
+    restart: unless-stopped
+    environment:
+      LINEAR_API_KEY: ${LINEAR_API_KEY}
+      TODOIST_API_TOKEN: ${TODOIST_API_TOKEN}
+      POLL_INTERVAL_SECONDS: 60
+      DIGEST_TIME: "07:00"
+      DIGEST_TIMEZONE: "America/Chicago"
+      METRICS_PORT: 9464
+    ports:
+      - "9464:9464"
