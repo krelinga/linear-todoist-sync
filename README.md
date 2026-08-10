@@ -51,6 +51,15 @@ The app reads configuration straight from `process.env` - there's no
 built-in `.env` loader, so local runs need the variables exported into the
 shell first (as above), same as any other env var.
 
+## Release
+
+```sh
+npm version <newversion>   # e.g. npm version minor - bumps package.json and
+                            # package-lock.json together, commits, and tags
+```
+
+That's the only step today; more release automation is planned.
+
 ## Observability
 
 `/metrics` on `METRICS_PORT` serves Prometheus text format. The one metric
