@@ -7,6 +7,9 @@ export const ATTACHMENT_SCHEMA_VERSION = 1;
 /** Marker prefix used to recognize this service's own Todoist projects during discovery (§6.2). */
 export const LINKED_ISSUE_MARKER_PREFIX = 'Linked Linear issue: ';
 
+/** Publicly hosted Todoist icon for the Linear attachment card (§5.4). */
+export const TODOIST_ICON_URL = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/todoist.png';
+
 /** Prefix applied when an in-progress issue is deleted outright (§5.1). Idempotent by design. */
 const LOST_PREFIX = '[LOST] ';
 

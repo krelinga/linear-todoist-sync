@@ -88,3 +88,23 @@ export type Snapshot = {
   mappings: IssueMapping[];
   orphans: OrphanedProject[];
 };
+
+/**
+ * A single reconciliation decision (§5.1/§5.2), independent of how it gets executed. plan.ts
+ * only ever decides WHAT to do; apply.ts (next commit) fetches whatever extra content a given
+ * action needs and calls the clients.
+ */
+export type Action =
+  | { kind: 'create_project'; issue: LinearIssueSummary }
+  | { kind: 'recreate_project'; issue: LinearIssueSummary; previousProjectUrl: string }
+  | { kind: 'unarchive_project'; project: TodoistProjectSummary; issue: LinearIssueSummary }
+  | { kind: 'rename_project'; project: TodoistProjectSummary; issue: LinearIssueSummary }
+  | { kind: 'reattach_card'; issue: LinearIssueSummary; project: TodoistProjectSummary }
+  | {
+      kind: 'refresh_card';
+      attachment: LinearAttachmentSummary;
+      project: TodoistProjectSummary;
+      issue: LinearIssueSummary;
+    }
+  | { kind: 'archive_project'; project: TodoistProjectSummary; linkedIssueId: string }
+  | { kind: 'mark_lost'; project: TodoistProjectSummary };
