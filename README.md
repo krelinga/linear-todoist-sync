@@ -56,9 +56,18 @@ shell first (as above), same as any other env var.
 ```sh
 npm version <newversion>   # e.g. npm version minor - bumps package.json and
                             # package-lock.json together, commits, and tags
+git push && git push --tags
 ```
 
-That's the only step today; more release automation is planned.
+Then run the **Release Docker image** workflow from the repo's Actions tab
+(Actions → Release Docker image → Run workflow). It's manually triggered, not
+run automatically on push or tag - see
+[`.github/workflows/release-docker.yml`](.github/workflows/release-docker.yml).
+It builds the image and pushes it to GitHub Container Registry at
+`ghcr.io/krelinga/linear-todoist-sync`, tagged with the `major`,
+`major.minor`, and `major.minor.patch` versions read from `package.json` at
+run time (e.g. `:0`, `:0.1`, `:0.1.0`) - so it always reflects whatever
+version is on `main` when you run it, not the commit that triggered it.
 
 ## Observability
 
