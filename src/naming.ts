@@ -23,12 +23,22 @@ export function buildProjectDescription(issueUrl: string): string {
   return `${LINKED_ISSUE_MARKER_PREFIX}${issueUrl}`;
 }
 
-/** Extracts the linked Linear issue URL from a Todoist project description, if present. */
+/** Matches a whole-string markdown link like `[Linear](https://example.com)`. */
+const MARKDOWN_LINK = /^\[[^\]]*\]\((\S+)\)$/;
+
+/**
+ * Extracts the linked Linear issue URL from a Todoist project description, if present.
+ *
+ * Todoist rewrites a bare URL in a project description into a markdown link
+ * (`[Linear](https://...)`) as soon as it's saved, so a description built by
+ * `buildProjectDescription` never round-trips as plain text - it must be unwrapped here.
+ */
 export function parseLinkedIssueUrl(description: string): string | null {
   if (!description.startsWith(LINKED_ISSUE_MARKER_PREFIX)) {
     return null;
   }
-  const url = description.slice(LINKED_ISSUE_MARKER_PREFIX.length).trim();
+  const raw = description.slice(LINKED_ISSUE_MARKER_PREFIX.length).trim();
+  const url = MARKDOWN_LINK.exec(raw)?.[1] ?? raw;
   return url.length > 0 ? url : null;
 }
 

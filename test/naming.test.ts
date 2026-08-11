@@ -37,6 +37,11 @@ describe('buildProjectDescription / parseLinkedIssueUrl', () => {
   it('returns null when the marker is present but the url is empty', () => {
     expect(parseLinkedIssueUrl('Linked Linear issue:    ')).toBeNull();
   });
+
+  it('unwraps a Todoist-rewritten markdown link', () => {
+    const url = 'https://linear.app/acme/issue/ENG-123';
+    expect(parseLinkedIssueUrl(`Linked Linear issue: [Linear](${url})`)).toBe(url);
+  });
 });
 
 describe('isLostProject / markAsLost', () => {
