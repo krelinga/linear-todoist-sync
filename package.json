@@ -1,6 +1,6 @@
 {
   "name": "linear-todoist-sync",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Mirrors in-progress Linear issues into Todoist projects, and reports completed Todoist tasks back to Linear.",
   "private": true,
   "type": "module",
