@@ -21,18 +21,22 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
     todoist.getMarkedProjects(),
   ]);
 
-  const projectByIssueUrl = new Map<string, TodoistProjectSummary>();
+  // Keyed by Linear issue identifier (e.g. "ENG-123"), not the full issue URL: the URL carries a
+  // title-derived slug that changes whenever the issue is renamed, which would otherwise break
+  // matching on every title edit - exactly the transition §5.1's rename_project exists to handle.
+  const projectByIssueIdentifier = new Map<string, TodoistProjectSummary>();
   for (const project of projects) {
     const issueUrl = parseLinkedIssueUrl(project.description);
-    if (issueUrl && !projectByIssueUrl.has(issueUrl)) {
-      projectByIssueUrl.set(issueUrl, project);
+    const identifier = issueUrl ? parseIssueIdentifierFromUrl(issueUrl) : null;
+    if (identifier && !projectByIssueIdentifier.has(identifier)) {
+      projectByIssueIdentifier.set(identifier, project);
     }
   }
 
   const matchedProjectIds = new Set<string>();
   const mappings: IssueMapping[] = await Promise.all(
     issues.map(async (issue) => {
-      const matchedProject = projectByIssueUrl.get(issue.url) ?? null;
+      const matchedProject = projectByIssueIdentifier.get(issue.identifier) ?? null;
       if (matchedProject) {
         matchedProjectIds.add(matchedProject.id);
       }

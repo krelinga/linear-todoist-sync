@@ -84,6 +84,24 @@ describe('discover', () => {
     expect(snapshot.orphans).toEqual([]);
   });
 
+  it('still matches after a title change moves the issue URL slug (project keeps the stale slug)', async () => {
+    const renamedIssue = issue({
+      title: 'Renamed title',
+      url: 'https://linear.app/acme/issue/ENG-1/renamed-title',
+    });
+    const linear = fakeLinear({
+      getStartedIssues: vi.fn().mockResolvedValue([renamedIssue]),
+      getMarkerAttachment: vi.fn().mockResolvedValue(attachment()),
+    });
+    // Project's description still has the URL captured at creation time, with the old slug.
+    const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([project()]) });
+
+    const snapshot = await discover(linear, todoist);
+
+    expect(snapshot.mappings[0]?.matchedProject).toEqual(project());
+    expect(snapshot.orphans).toEqual([]);
+  });
+
   it('leaves matchedProject and attachment null for a brand-new started issue', async () => {
     const linear = fakeLinear({ getStartedIssues: vi.fn().mockResolvedValue([issue()]) });
     const todoist = fakeTodoist();
