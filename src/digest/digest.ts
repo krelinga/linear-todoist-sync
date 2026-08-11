@@ -7,7 +7,19 @@ import type { TodoistPort } from '../clients/todoist.js';
 import type { Metrics } from '../metrics.js';
 import type { IssueMapping } from '../types.js';
 
-const EPOCH = new Date(0).toISOString();
+/**
+ * Todoist's completed-tasks-by-completion-date endpoint rejects any since/until span over 3
+ * months (error_code 20, "completion date range must not exceed 3 months"). A mapping with no
+ * lastDigestAt watermark yet (i.e. it's never had a successful digest) needs *some* fallback
+ * start point, but the true epoch would 400 on every call - and since that call throws before
+ * the watermark can ever be written, it would fail identically forever, not just once. 89 days
+ * stays safely under the 3-month limit regardless of month lengths.
+ */
+const DEFAULT_LOOKBACK_DAYS = 89;
+
+function defaultDigestSince(): string {
+  return new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
 
 export type DigestDeps = {
   linear: LinearPort;
@@ -59,7 +71,7 @@ async function runDigestForMapping(mapping: IssueMapping, deps: DigestDeps): Pro
     return;
   }
 
-  const lastDigestAt = getLastDigestAt(attachment.metadata) ?? EPOCH;
+  const lastDigestAt = getLastDigestAt(attachment.metadata) ?? defaultDigestSince();
   const completedTasks = await deps.todoist.getCompletedTasksSince(project.id, lastDigestAt);
   if (completedTasks.length === 0) {
     return; // §7 point 3: nothing to report, no comment and no metadata write.

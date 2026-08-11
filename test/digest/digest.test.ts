@@ -115,15 +115,24 @@ describe('runDigestJob', () => {
     expect(getCompletedTasksSince).toHaveBeenCalledWith('proj-1', '2026-08-08T00:00:00.000Z');
   });
 
-  it('falls back to the epoch when no watermark has ever been recorded', async () => {
-    const linear = fakeLinear();
-    const getCompletedTasksSince = vi.fn().mockResolvedValue([]);
-    const todoist = fakeTodoist({ getCompletedTasksSince });
-    const metrics = createMetrics();
+  it('falls back to a bounded lookback window, not the epoch, when no watermark has ever been recorded', async () => {
+    // Todoist's completed-tasks-by-completion-date endpoint rejects since/until spans over 3
+    // months - falling back to the true epoch would 400 on every call, forever, since that
+    // failure blocks the watermark from ever being written.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-10T00:00:00.000Z'));
+      const linear = fakeLinear();
+      const getCompletedTasksSince = vi.fn().mockResolvedValue([]);
+      const todoist = fakeTodoist({ getCompletedTasksSince });
+      const metrics = createMetrics();
 
-    await runDigestJob({ linear, todoist, metrics });
+      await runDigestJob({ linear, todoist, metrics });
 
-    expect(getCompletedTasksSince).toHaveBeenCalledWith('proj-1', new Date(0).toISOString());
+      expect(getCompletedTasksSince).toHaveBeenCalledWith('proj-1', '2026-05-13T00:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('skips silently when there is nothing to report - no comment, no metadata write', async () => {
