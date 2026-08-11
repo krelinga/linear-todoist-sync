@@ -1,5 +1,6 @@
 import { extractHttpStatus, httpRetryClassifier, withRetry } from '../retry.js';
 import { isMarkerAttachment } from '../naming.js';
+import { logger } from '../logger.js';
 import type { Metrics } from '../metrics.js';
 import type {
   CreateAttachmentInput,
@@ -75,6 +76,11 @@ function toSummary(issue: RawIssue, stateType: string): LinearIssueSummary {
     stateType,
     updatedAt: issue.updatedAt.toISOString(),
   };
+}
+
+/** Keeps log lines scannable when a comment body (e.g. a full digest) is long. */
+function truncate(text: string, maxLength: number): string {
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 }
 
 function toAttachmentSummary(attachment: RawAttachment): LinearAttachmentSummary {
@@ -180,6 +186,12 @@ export class LinearClient implements LinearPort {
     if (!attachment) {
       throw new Error(`createAttachment for issue ${input.issueId} returned no attachment`);
     }
+    logger.info('Created Linear attachment', {
+      system: 'linear',
+      issueId: input.issueId,
+      title: input.title,
+      url: input.url,
+    });
     return toAttachmentSummary(attachment);
   }
 
@@ -191,9 +203,20 @@ export class LinearClient implements LinearPort {
         metadata: input.metadata,
       }),
     );
+    logger.info('Updated Linear attachment', {
+      system: 'linear',
+      attachmentId: id,
+      title: input.title,
+      subtitle: input.subtitle,
+    });
   }
 
   async createComment(issueId: string, body: string): Promise<void> {
     await this.call(() => this.sdk.createComment({ issueId, body }));
+    logger.info('Posted Linear comment', {
+      system: 'linear',
+      issueId,
+      bodyPreview: truncate(body, 120),
+    });
   }
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LinearClient } from '../../src/clients/linear.js';
 import type {
   LinearSdkClient,
@@ -8,6 +8,15 @@ import type {
   RawIssue,
 } from '../../src/clients/linear.js';
 import { createMetrics } from '../../src/metrics.js';
+import { logger } from '../../src/logger.js';
+
+vi.mock('../../src/logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 function rawIssue(overrides: Partial<Omit<RawIssue, 'state' | 'attachments'>> & { stateType?: string }): RawIssue {
   const { stateType, ...rest } = overrides;
@@ -214,6 +223,36 @@ describe('LinearClient', () => {
         expect.objectContaining({ issueId: 'issue-1', url: 'https://todoist.com/showProject?id=123' }),
       );
       expect(result.id).toBe('att-1');
+      expect(logger.info).toHaveBeenCalledWith(
+        'Created Linear attachment',
+        expect.objectContaining({
+          system: 'linear',
+          issueId: 'issue-1',
+          url: 'https://todoist.com/showProject?id=123',
+        }),
+      );
+    });
+
+    it('does not log when the mutation fails before an attachment exists', async () => {
+      const payload: RawAttachmentPayload = { attachment: undefined };
+      const sdk: LinearSdkClient = {
+        issues: vi.fn(),
+        issue: vi.fn(),
+        createAttachment: vi.fn().mockResolvedValue(payload),
+        updateAttachment: vi.fn(),
+        createComment: vi.fn(),
+      };
+      const client = new LinearClient(sdk);
+      await expect(
+        client.createAttachment({
+          issueId: 'issue-1',
+          title: 'x',
+          url: 'https://example.com',
+          iconUrl: 'https://example.com/icon.png',
+          metadata: {},
+        }),
+      ).rejects.toThrow();
+      expect(logger.info).not.toHaveBeenCalled();
     });
 
     it('throws if the mutation reports no attachment', async () => {
@@ -238,7 +277,29 @@ describe('LinearClient', () => {
     });
   });
 
-  it('createComment forwards issueId and body', async () => {
+  it('updateAttachment forwards id and fields, and logs the write', async () => {
+    const updateAttachment = vi.fn().mockResolvedValue({});
+    const sdk: LinearSdkClient = {
+      issues: vi.fn(),
+      issue: vi.fn(),
+      createAttachment: vi.fn(),
+      updateAttachment,
+      createComment: vi.fn(),
+    };
+    const client = new LinearClient(sdk);
+    await client.updateAttachment('att-1', { title: '[ENG-1] New title', subtitle: '3 tasks outstanding' });
+    expect(updateAttachment).toHaveBeenCalledWith('att-1', {
+      title: '[ENG-1] New title',
+      subtitle: '3 tasks outstanding',
+      metadata: undefined,
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      'Updated Linear attachment',
+      expect.objectContaining({ system: 'linear', attachmentId: 'att-1', title: '[ENG-1] New title' }),
+    );
+  });
+
+  it('createComment forwards issueId and body, and logs a preview of the write', async () => {
     const createComment = vi.fn().mockResolvedValue({});
     const sdk: LinearSdkClient = {
       issues: vi.fn(),
@@ -250,6 +311,27 @@ describe('LinearClient', () => {
     const client = new LinearClient(sdk);
     await client.createComment('issue-1', 'hello');
     expect(createComment).toHaveBeenCalledWith({ issueId: 'issue-1', body: 'hello' });
+    expect(logger.info).toHaveBeenCalledWith(
+      'Posted Linear comment',
+      expect.objectContaining({ system: 'linear', issueId: 'issue-1', bodyPreview: 'hello' }),
+    );
+  });
+
+  it('truncates a long comment body in the log preview', async () => {
+    const createComment = vi.fn().mockResolvedValue({});
+    const sdk: LinearSdkClient = {
+      issues: vi.fn(),
+      issue: vi.fn(),
+      createAttachment: vi.fn(),
+      updateAttachment: vi.fn(),
+      createComment,
+    };
+    const client = new LinearClient(sdk);
+    const longBody = 'x'.repeat(200);
+    await client.createComment('issue-1', longBody);
+    const fields = vi.mocked(logger.info).mock.calls[0]?.[1] as { bodyPreview: string };
+    expect(fields.bodyPreview.length).toBe(121); // 120 chars + the ellipsis marker
+    expect(fields.bodyPreview.endsWith('…')).toBe(true);
   });
 
   it('records API request metrics on success and failure', async () => {

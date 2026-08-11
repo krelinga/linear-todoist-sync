@@ -1,5 +1,6 @@
 import { extractHttpStatus, httpRetryClassifier, withRetry } from '../retry.js';
 import { LINKED_ISSUE_MARKER_PREFIX } from '../naming.js';
+import { logger } from '../logger.js';
 import type { Metrics } from '../metrics.js';
 import type {
   CreateProjectInput,
@@ -101,6 +102,11 @@ function toSectionSummary(section: RawSection): TodoistSectionSummary {
   return { id: section.id, name: section.name, order: section.sectionOrder };
 }
 
+/** Keeps log lines scannable when a comment body is long. */
+function truncate(text: string, maxLength: number): string {
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+}
+
 export class TodoistClient implements TodoistPort {
   constructor(
     private readonly sdk: TodoistSdkClient,
@@ -155,19 +161,27 @@ export class TodoistClient implements TodoistPort {
     const project = await this.call(() =>
       this.sdk.addProject({ name: input.name, description: input.description }),
     );
+    logger.info('Created Todoist project', {
+      system: 'todoist',
+      projectId: project.id,
+      name: project.name,
+    });
     return toProjectSummary(project);
   }
 
   async updateProject(id: string, input: UpdateProjectInput): Promise<void> {
     await this.call(() => this.sdk.updateProject(id, input));
+    logger.info('Updated Todoist project', { system: 'todoist', projectId: id, ...input });
   }
 
   async archiveProject(id: string): Promise<void> {
     await this.call(() => this.sdk.archiveProject(id));
+    logger.info('Archived Todoist project', { system: 'todoist', projectId: id });
   }
 
   async unarchiveProject(id: string): Promise<void> {
     await this.call(() => this.sdk.unarchiveProject(id));
+    logger.info('Unarchived Todoist project', { system: 'todoist', projectId: id });
   }
 
   async getOutstandingTasks(
@@ -214,5 +228,10 @@ export class TodoistClient implements TodoistPort {
 
   async addProjectComment(projectId: string, content: string): Promise<void> {
     await this.call(() => this.sdk.addComment({ projectId, content }));
+    logger.info('Posted Todoist comment', {
+      system: 'todoist',
+      projectId,
+      contentPreview: truncate(content, 120),
+    });
   }
 }

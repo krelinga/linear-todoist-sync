@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TodoistClient } from '../../src/clients/todoist.js';
 import type {
   RawProject,
@@ -7,6 +7,15 @@ import type {
   TodoistSdkClient,
 } from '../../src/clients/todoist.js';
 import { createMetrics } from '../../src/metrics.js';
+import { logger } from '../../src/logger.js';
+
+vi.mock('../../src/logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 function rawProject(overrides: Partial<RawProject> = {}): RawProject {
   return {
@@ -101,9 +110,13 @@ describe('TodoistClient', () => {
       description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-1',
     });
     expect(result.id).toBe('proj-1');
+    expect(logger.info).toHaveBeenCalledWith(
+      'Created Todoist project',
+      expect.objectContaining({ system: 'todoist', projectId: 'proj-1', name: '[ENG-1] Fix the thing' }),
+    );
   });
 
-  it('updateProject, archiveProject, and unarchiveProject forward to the SDK', async () => {
+  it('updateProject, archiveProject, and unarchiveProject forward to the SDK and log each write', async () => {
     const updateProject = vi.fn().mockResolvedValue(rawProject());
     const archiveProject = vi.fn().mockResolvedValue(rawProject());
     const unarchiveProject = vi.fn().mockResolvedValue(rawProject());
@@ -111,12 +124,24 @@ describe('TodoistClient', () => {
 
     await client.updateProject('proj-1', { name: 'New name' });
     expect(updateProject).toHaveBeenCalledWith('proj-1', { name: 'New name' });
+    expect(logger.info).toHaveBeenCalledWith(
+      'Updated Todoist project',
+      expect.objectContaining({ system: 'todoist', projectId: 'proj-1', name: 'New name' }),
+    );
 
     await client.archiveProject('proj-1');
     expect(archiveProject).toHaveBeenCalledWith('proj-1');
+    expect(logger.info).toHaveBeenCalledWith(
+      'Archived Todoist project',
+      expect.objectContaining({ system: 'todoist', projectId: 'proj-1' }),
+    );
 
     await client.unarchiveProject('proj-1');
     expect(unarchiveProject).toHaveBeenCalledWith('proj-1');
+    expect(logger.info).toHaveBeenCalledWith(
+      'Unarchived Todoist project',
+      expect.objectContaining({ system: 'todoist', projectId: 'proj-1' }),
+    );
   });
 
   describe('getOutstandingTasks', () => {
@@ -160,11 +185,25 @@ describe('TodoistClient', () => {
     });
   });
 
-  it('addProjectComment forwards projectId and content', async () => {
+  it('addProjectComment forwards projectId and content, and logs a preview of the write', async () => {
     const addComment = vi.fn().mockResolvedValue({});
     const client = new TodoistClient(fakeSdk({ addComment }));
     await client.addProjectComment('proj-1', 'hello');
     expect(addComment).toHaveBeenCalledWith({ projectId: 'proj-1', content: 'hello' });
+    expect(logger.info).toHaveBeenCalledWith(
+      'Posted Todoist comment',
+      expect.objectContaining({ system: 'todoist', projectId: 'proj-1', contentPreview: 'hello' }),
+    );
+  });
+
+  it('truncates a long comment body in the log preview', async () => {
+    const addComment = vi.fn().mockResolvedValue({});
+    const client = new TodoistClient(fakeSdk({ addComment }));
+    const longContent = 'x'.repeat(200);
+    await client.addProjectComment('proj-1', longContent);
+    const fields = vi.mocked(logger.info).mock.calls[0]?.[1] as { contentPreview: string };
+    expect(fields.contentPreview.length).toBe(121); // 120 chars + the ellipsis marker
+    expect(fields.contentPreview.endsWith('…')).toBe(true);
   });
 
   it('records API request metrics on success and failure', async () => {
