@@ -53,6 +53,28 @@ describe('TodoistClient', () => {
       expect(result.map((p) => p.id)).toEqual(['proj-1', 'proj-3']);
     });
 
+    it('ignores a description that looks like the marker but does not match it exactly', async () => {
+      // A similarly-worded description for another tool's integration (or the marker text
+      // appearing mid-description rather than as a prefix) must never be treated as this
+      // service's own project - only an exact-prefix match may ever be acted on.
+      const lookalikePrefix = rawProject({
+        id: 'proj-lookalike',
+        description: 'Linked Jira issue: https://example.atlassian.net/browse/HOME-1',
+      });
+      const markerNotAtStart = rawProject({
+        id: 'proj-embedded',
+        description: 'See also: Linked Linear issue: https://linear.app/acme/issue/ENG-9',
+      });
+      const sdk = fakeSdk({
+        getProjects: vi
+          .fn()
+          .mockResolvedValue({ results: [lookalikePrefix, markerNotAtStart], nextCursor: null }),
+      });
+      const client = new TodoistClient(sdk);
+      const result = await client.getMarkedProjects();
+      expect(result).toEqual([]);
+    });
+
     it('paginates through multiple pages of both active and archived projects', async () => {
       const getProjects = vi
         .fn()

@@ -9,6 +9,15 @@ Full design rationale, the state machine, and every edge case this service
 handles live in [`docs/design/linear-todoist-sync-design.md`](docs/design/linear-todoist-sync-design.md)
 — this README only covers running it.
 
+## Scope
+
+Safe to run against a Todoist account that already has other, unrelated
+projects in it: this service only ever reads, renames, archives, or
+otherwise touches a Todoist project if its description starts with the
+exact `Linked Linear issue: <url>` marker it writes at creation time. Any
+other project - including one with a similar-looking but non-matching
+description - is left alone entirely.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and fill in both API tokens:
