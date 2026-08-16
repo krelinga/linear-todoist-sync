@@ -19,6 +19,7 @@ describe('loadConfig', () => {
       digestTime: '07:00',
       digestTimezone: 'UTC',
       metricsPort: 9464,
+      webhook: null,
     });
   });
 
@@ -53,5 +54,59 @@ describe('loadConfig', () => {
 
   it('rejects an unrecognized DIGEST_TIMEZONE', () => {
     expect(() => loadConfig(baseEnv({ DIGEST_TIMEZONE: 'Not/AZone' }))).toThrow(ConfigError);
+  });
+
+  describe('webhook settings', () => {
+    it('is poll-only when no signing secret is set', () => {
+      expect(loadConfig(baseEnv()).webhook).toBeNull();
+    });
+
+    it('applies webhook defaults once a secret is present', () => {
+      const config = loadConfig(baseEnv({ LINEAR_WEBHOOK_SECRET: 'shh' }));
+      expect(config.webhook).toEqual({
+        secret: 'shh',
+        port: 9465,
+        path: '/webhooks/linear',
+        debounceMs: 2000,
+      });
+    });
+
+    it('reads webhook overrides', () => {
+      const config = loadConfig(
+        baseEnv({
+          LINEAR_WEBHOOK_SECRET: 'shh',
+          WEBHOOK_PORT: '9999',
+          WEBHOOK_PATH: '/hooks/x',
+          WEBHOOK_DEBOUNCE_MS: '500',
+        }),
+      );
+      expect(config.webhook).toEqual({
+        secret: 'shh',
+        port: 9999,
+        path: '/hooks/x',
+        debounceMs: 500,
+      });
+    });
+
+    // Fails closed (§5.6): these combinations always mean the operator believed the receiver
+    // was running when it was not, so they must be loud rather than silently ignored.
+    it.each(['WEBHOOK_PORT', 'WEBHOOK_PATH', 'WEBHOOK_DEBOUNCE_MS'])(
+      'throws when %s is set without a secret',
+      (name) => {
+        expect(() => loadConfig(baseEnv({ [name]: '9999' }))).toThrow(ConfigError);
+      },
+    );
+
+    it('rejects a webhook port that collides with the metrics port', () => {
+      expect(() =>
+        loadConfig(baseEnv({ LINEAR_WEBHOOK_SECRET: 'shh', WEBHOOK_PORT: '9464' })),
+      ).toThrow(ConfigError);
+    });
+
+    it('rejects a webhook path that is not rooted', () => {
+      expect(() =>
+        loadConfig(baseEnv({ LINEAR_WEBHOOK_SECRET: 'shh', WEBHOOK_PATH: 'webhooks/linear' })),
+      ).toThrow(ConfigError);
+    });
   });
 });
