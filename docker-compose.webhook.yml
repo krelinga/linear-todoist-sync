@@ -1,0 +1,61 @@
+# Push-enabled topology: the sync service plus a Tailscale sidecar that receives Linear's
+# webhooks over Funnel. Use INSTEAD of docker-compose.yml, not alongside it:
+#
+#   docker compose -f docker-compose.webhook.yml up --build -d
+#
+# Rolling back is a file swap - with the receiver gone, deliveries simply fail and Linear gives
+# up, and reconciliation carries on at POLL_INTERVAL_SECONDS. See
+# docs/design/linear-webhooks-design.md §6 and §10.
+#
+# Prerequisites on the tailnet side (§6.1), none of which live in this file:
+#   - MagicDNS and HTTPS certificates enabled
+#   - a `funnel` node attribute granting tag:webhook-ingress
+#   - an ACL denying tag:webhook-ingress outbound tailnet access (§6.4)
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    restart: unless-stopped
+    # Becomes <hostname>.<tailnet>.ts.net, which is baked into the webhook URL registered in
+    # Linear. Pin it: if it changes, deliveries 404 and nothing else looks wrong.
+    hostname: linear-sync
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_EXTRA_ARGS: --advertise-tags=tag:webhook-ingress
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      # Without persistent state the node re-authenticates on every restart and can come back
+      # as linear-sync-1, linear-sync-2, ... - silently changing the hostname above.
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    ports:
+      # Metrics for a LAN Prometheus. Declared here rather than on the sync service, which
+      # cannot publish its own ports once it joins this namespace. Deliberately NOT funnelled.
+      - "9464:9464"
+
+  linear-todoist-sync:
+    build: .
+    restart: unless-stopped
+    # Shares the sidecar's network namespace, so tailscaled reaches the receiver at
+    # 127.0.0.1:9465 and nothing binds a host port. This is also why a reverse proxy already
+    # holding :443 on the host is not a conflict (§6.3).
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+    environment:
+      LINEAR_API_KEY: ${LINEAR_API_KEY}
+      TODOIST_API_TOKEN: ${TODOIST_API_TOKEN}
+      LINEAR_WEBHOOK_SECRET: ${LINEAR_WEBHOOK_SECRET}
+      WEBHOOK_PORT: 9465
+      WEBHOOK_PATH: /webhooks/linear
+      WEBHOOK_DEBOUNCE_MS: 2000
+      # Start at 60 and only raise this once the probe shows deliveries landing (§10), then
+      # retune the poll-staleness alert in the same change or it will page on every cycle.
+      POLL_INTERVAL_SECONDS: 60
+      DIGEST_TIME: "07:00"
+      DIGEST_TIMEZONE: "America/Chicago"
+      METRICS_PORT: 9464
+
+volumes:
+  tailscale-state:

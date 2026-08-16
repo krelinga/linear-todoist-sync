@@ -30,6 +30,14 @@ Copy `.env.example` to `.env` and fill in both API tokens:
 | `DIGEST_TIME` | no | `07:00` | Local time (24-hour `HH:MM`) the daily digest comment runs |
 | `DIGEST_TIMEZONE` | no | `UTC` | IANA time zone `DIGEST_TIME` is interpreted in |
 | `METRICS_PORT` | no | `9464` | Port serving Prometheus-format metrics at `/metrics` |
+| `LINEAR_WEBHOOK_SECRET` | no | - | Signing secret from Linear. Unset ⇒ poll-only mode; see [Webhooks](#webhooks-optional) |
+| `WEBHOOK_PORT` | no | `9465` | Port the webhook receiver listens on. Must differ from `METRICS_PORT` |
+| `WEBHOOK_PATH` | no | `/webhooks/linear` | Path the receiver answers on |
+| `WEBHOOK_DEBOUNCE_MS` | no | `2000` | Window over which a burst of deliveries collapses into one cycle |
+
+Setting any `WEBHOOK_*` variable without `LINEAR_WEBHOOK_SECRET` is a startup
+error rather than a silent no-op — that combination always means someone
+believed the receiver was running when it was not.
 
 ## Running with Docker (recommended)
 
@@ -41,6 +49,51 @@ Reads `LINEAR_API_KEY` and `TODOIST_API_TOKEN` from a `.env` file in this
 directory automatically (that's a Docker Compose feature, not something this
 app does itself) - `docker-compose.yml` already sets the other variables. No
 volumes are mounted; there's no local state that needs to survive a restart.
+
+## Webhooks (optional)
+
+By default the service polls Linear every minute. It can instead be *nudged* by
+Linear webhooks, cutting Linear→Todoist latency to a couple of seconds while the
+poll loop stays on as a fallback. Design and rationale:
+[`docs/design/linear-webhooks-design.md`](docs/design/linear-webhooks-design.md).
+
+A webhook never mutates anything directly — it triggers the same full
+reconciliation cycle the timer does. So a webhook that breaks, or is disabled by
+Linear, costs latency and nothing else; the service keeps reconciling correctly
+on the poll interval.
+
+```sh
+docker compose -f docker-compose.webhook.yml up --build -d
+```
+
+That topology adds a Tailscale sidecar which receives deliveries over Funnel. It
+replaces `docker-compose.yml` rather than layering onto it. Before it will work:
+
+1. Enable MagicDNS and HTTPS certificates on your tailnet, grant a `funnel` node
+   attribute to `tag:webhook-ingress`, and add an ACL denying that tag outbound
+   tailnet access.
+2. Create the webhook in Linear's UI (Settings → API → Webhooks) pointing at
+   `https://<node>.<tailnet>.ts.net/webhooks/linear`, subscribed to `Issue` only.
+   Doing this in the browser is what keeps an admin-scoped token out of the
+   container — `LINEAR_API_KEY` needs no extra privileges.
+3. Put the signing secret Linear shows you in `LINEAR_WEBHOOK_SECRET`, and a
+   **tagged** auth key in `TS_AUTHKEY`. Tagged nodes do not expire; user-owned
+   ones do after 180 days, which would silently take the Funnel down.
+
+To roll back, switch back to `docker-compose.yml`. There is no state to migrate.
+
+### Monitoring that it still works
+
+A broken webhook is invisible: the fallback poll keeps everything correct, so
+nothing fails and sync just gets quietly slower. `sync_last_webhook_received_*`
+cannot tell you — a quiet weekend and a dead Funnel look identical in it.
+
+Probe the public path instead. An unauthenticated `POST` returns **401** by
+design, and that 401 is the health signal: it proves DNS, Funnel, TLS, the
+tailnet node and the receiver are all alive. `blackbox_exporter` config and the
+one setting that makes it trustworthy (pinning a public resolver, so the probe
+cannot silently resolve via MagicDNS and bypass Funnel entirely) are in §8.2 of
+the design doc.
 
 ## Local development
 

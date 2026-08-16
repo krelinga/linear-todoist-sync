@@ -8,7 +8,12 @@ The service is **implemented and released** (v1.1.0): TypeScript source in `src/
 
 `docs/design/linear-todoist-sync-design.md` remains the authoritative spec for *behavior* — it reflects decisions locked in with the user (§2.3) and carries explicit rationale for why alternatives were rejected. Consult it rather than re-deriving intent from the code.
 
-`docs/design/linear-webhooks-design.md` is **design-phase only — none of it is implemented.** It plans a push-based Linear→Todoist path (Linear webhooks received over Tailscale Funnel) layered on top of the existing poll loop, and was written to be built later. Nothing in `src/` corresponds to it: its env vars (`LINEAR_WEBHOOK_SECRET`, `WEBHOOK_PORT`, …), its metrics, and its sidecar container do not exist yet. Do not assume otherwise when reading or changing code.
+`docs/design/linear-webhooks-design.md` describes the optional push-based Linear→Todoist path. The **service side is implemented** (`src/webhook/`, wired in `src/index.ts`, deployed via `docker-compose.webhook.yml`); it is off unless `LINEAR_WEBHOOK_SECRET` is set, in which case the service behaves exactly as it did before.
+
+Two parts of that doc are deliberately **not** code and never will be, so don't go looking for them in `src/`:
+
+- **Ingress** — the Tailscale sidecar, `tailscale/serve.json`, and the tailnet prerequisites (webhook §6). Deployment config.
+- **The ingress probe** — a `blackbox_exporter` job plus an alert rule (webhook §8.2). This lives in the Prometheus stack, not here. The service's only contribution is that an unauthenticated `POST` returns 401, which is what the probe asserts; `src/webhook/server.ts` counts those separately as `result="probe"` so they don't pollute `rejected_signature`.
 
 **Section-reference convention in this file:** bare `§N` refers to the base design doc; the webhook doc is cited explicitly as "webhook §N".
 
@@ -24,7 +29,7 @@ A single-process, self-hosted sync service that mirrors Linear's "in progress" i
   - **Todoist → Linear** link: the Todoist project's `description` field, set once at creation to a link back to the Linear issue.
   - Two in-memory-only performance cursors (Todoist `sync_token`, Linear `updatedAt`) exist purely to make polling cheap and are safe to lose on restart.
 - **Full-state reconciliation, not an event log.** Every poll cycle rediscovers the current state of both systems from scratch (Linear issues with `state.type == started`, Todoist projects carrying the service's marker) and diffs them — there is no cached "what I did last time." This makes cold start, crash recovery, and total disk loss all identical to a normal poll cycle (§5, §9).
-- **Polling, not webhooks** — 1-minute interval, no inbound exposure of the homelab required (§4.2). A webhook nudge was always the anticipated evolution, and is now designed (but not built) in `docs/design/linear-webhooks-design.md`: it would trigger an immediate poll rather than replace reconciliation, leaving §5 untouched.
+- **Polling always runs**, on a 1-minute default interval (§4.2). Linear webhooks are an optional *nudge* on top (webhook §3.1): they trigger the same reconciliation cycle the timer does, never mutating anything directly, so §5 is untouched and a broken webhook costs latency rather than correctness. The poll loop is the fallback that makes that true, and it is also the only path that notices Todoist-originated changes.
 - **Linear wins** on any conflict (title/name divergence) — Todoist-side edits are reconciled back to match Linear on the next poll.
 - **Never deletes Todoist projects.** The service will create, rename, archive, and unarchive projects, but never issues a delete call. If a Linear issue is deleted, the corresponding project is renamed with a `[LOST] ` prefix and left alone (idempotent — later polls skip already-prefixed projects) rather than removed.
 - **Single in-process lock** shared between the 1-minute poll loop and the once-daily digest job, since both can write to the same Linear attachment and must never run concurrently.
