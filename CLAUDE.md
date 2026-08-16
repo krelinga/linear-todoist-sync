@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This repository currently contains **no implementation** — only a design document (`docs/design/linear-todoist-sync-design.md`) and a devcontainer setup. There is no `package.json`, source directory, build tooling, or test suite yet. When asked to implement this service, treat the design document as the authoritative spec and follow it closely rather than inventing alternative architecture — it reflects decisions already locked in with the user (§2.3), including several explicit rationale sections explaining *why* alternatives were rejected.
+The service is **implemented and released** (v1.1.0): TypeScript source in `src/`, tests in `test/` (vitest), `Dockerfile` and `docker-compose.yml` at the repo root, and a GHCR release workflow in `.github/workflows/`.
+
+`docs/design/linear-todoist-sync-design.md` remains the authoritative spec for *behavior* — it reflects decisions locked in with the user (§2.3) and carries explicit rationale for why alternatives were rejected. Consult it rather than re-deriving intent from the code.
+
+`docs/design/linear-webhooks-design.md` is **design-phase only — none of it is implemented.** It plans a push-based Linear→Todoist path (Linear webhooks received over Tailscale Funnel) layered on top of the existing poll loop, and was written to be built later. Nothing in `src/` corresponds to it: its env vars (`LINEAR_WEBHOOK_SECRET`, `WEBHOOK_PORT`, …), its metrics, and its sidecar container do not exist yet. Do not assume otherwise when reading or changing code.
+
+**Section-reference convention in this file:** bare `§N` refers to the base design doc; the webhook doc is cited explicitly as "webhook §N".
 
 ## What this service does
 
@@ -18,7 +24,7 @@ A single-process, self-hosted sync service that mirrors Linear's "in progress" i
   - **Todoist → Linear** link: the Todoist project's `description` field, set once at creation to a link back to the Linear issue.
   - Two in-memory-only performance cursors (Todoist `sync_token`, Linear `updatedAt`) exist purely to make polling cheap and are safe to lose on restart.
 - **Full-state reconciliation, not an event log.** Every poll cycle rediscovers the current state of both systems from scratch (Linear issues with `state.type == started`, Todoist projects carrying the service's marker) and diffs them — there is no cached "what I did last time." This makes cold start, crash recovery, and total disk loss all identical to a normal poll cycle (§5, §9).
-- **Polling, not webhooks** — 1-minute interval, no inbound exposure of the homelab required. Revisit only if latency or rate limits become a real problem (§4.2); a webhook could later be added purely as a "trigger an immediate poll" nudge without changing the reconciliation logic.
+- **Polling, not webhooks** — 1-minute interval, no inbound exposure of the homelab required (§4.2). A webhook nudge was always the anticipated evolution, and is now designed (but not built) in `docs/design/linear-webhooks-design.md`: it would trigger an immediate poll rather than replace reconciliation, leaving §5 untouched.
 - **Linear wins** on any conflict (title/name divergence) — Todoist-side edits are reconciled back to match Linear on the next poll.
 - **Never deletes Todoist projects.** The service will create, rename, archive, and unarchive projects, but never issues a delete call. If a Linear issue is deleted, the corresponding project is renamed with a `[LOST] ` prefix and left alone (idempotent — later polls skip already-prefixed projects) rather than removed.
 - **Single in-process lock** shared between the 1-minute poll loop and the once-daily digest job, since both can write to the same Linear attachment and must never run concurrently.
@@ -36,8 +42,17 @@ The design doc is organized by concern — consult the relevant section rather t
 - §9 — deployment (single Docker container, env vars, no volumes).
 - §10 — a table of every major trade-off and the condition under which it should be revisited.
 
+The webhook doc (design phase, unbuilt) is organized the same way:
+
+- webhook §3.1 — why a webhook is a *nudge* that triggers a normal reconciliation cycle, and not an event applier. This is the load-bearing decision; the rest follows from it.
+- webhook §5 — signature verification, replay window, and the exposure surface Funnel introduces.
+- webhook §6 — Tailscale sidecar topology, why the existing subnet router can't serve this, and the node-identity settings that fail silently.
+- webhook §8 — the external blackbox probe that monitors ingress, and why an admin-scoped Linear key was rejected in its favor.
+- webhook §13 — trade-offs and revisit conditions.
+
 ## Working in this repo
 
+- If implementing the webhook design, the nudge model (webhook §3.1) is not negotiable: a webhook must never mutate Linear or Todoist directly. Applying events in place would reintroduce ordering, dedup, and missed-event handling — exactly the failure modes full-state reconciliation exists to avoid — and would turn every webhook outage into a correctness problem instead of a latency one.
 - Since there's no local database, any implementation work should preserve the "discover everything fresh from Linear/Todoist every poll cycle" invariant (§5) — do not introduce local caching of mapping state as a shortcut, since that reintroduces the drift/corruption failure modes the design deliberately avoids.
 - The service must never call a Todoist project delete endpoint — this is a hard invariant (§5.1), not a style preference.
 - When creating a Todoist project for an issue, always search existing (active + archived) marked projects first before creating a new one — this live search is what prevents duplicate projects, since there's no uniqueness constraint to fall back on (§5.3).
