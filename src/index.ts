@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import { LinearClient as LinearSdkClient } from '@linear/sdk';
 import { TodoistApi } from '@doist/todoist-sdk';
 import { loadConfig, ConfigError } from './config.js';
@@ -7,6 +7,8 @@ import { createMetrics } from './metrics.js';
 import { LinearClient } from './clients/linear.js';
 import { TodoistClient } from './clients/todoist.js';
 import { startScheduler } from './scheduler.js';
+import { createPollNudge, type PollNudge } from './webhook/nudge.js';
+import { createWebhookServer } from './webhook/server.js';
 
 function main(): void {
   let config;
@@ -63,10 +65,47 @@ function main(): void {
     digestTimezone: config.digestTimezone,
   });
 
+  // The webhook receiver is a pure latency optimization: with no signing secret configured the
+  // service runs exactly as it did before, reconciling on the poll interval alone.
+  let webhookServer: Server | null = null;
+  let nudge: PollNudge | null = null;
+  if (config.webhook === null) {
+    logger.info('Webhook receiver disabled; reconciling on the poll interval only');
+  } else {
+    nudge = createPollNudge({
+      debounceMs: config.webhook.debounceMs,
+      runPoll: scheduler.requestPoll,
+      metrics,
+    });
+    const requestPoll = nudge.request;
+    webhookServer = createWebhookServer({
+      config: config.webhook,
+      metrics,
+      onIssueEvent: requestPoll,
+    });
+    webhookServer.listen(config.webhook.port, () => {
+      logger.info('Webhook receiver listening', {
+        port: config.webhook?.port,
+        path: config.webhook?.path,
+        debounceMs: config.webhook?.debounceMs,
+      });
+    });
+  }
+
   const shutdown = (signal: string) => {
     logger.info('Shutting down', { signal });
     scheduler.stop();
-    server.close(() => process.exit(0));
+    nudge?.stop();
+    const servers = [server, webhookServer].filter((s): s is Server => s !== null);
+    let remaining = servers.length;
+    for (const s of servers) {
+      s.close(() => {
+        remaining -= 1;
+        if (remaining === 0) {
+          process.exit(0);
+        }
+      });
+    }
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

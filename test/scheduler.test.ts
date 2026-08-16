@@ -167,6 +167,57 @@ describe('startScheduler', () => {
     }
   });
 
+  it('labels a requested poll as webhook-triggered', async () => {
+    vi.useFakeTimers();
+    const { linear, todoist, metrics } = fakePorts();
+    const scheduler = startScheduler({
+      config: { pollIntervalSeconds: 60, digestTime: '23:59', digestTimezone: 'UTC' },
+      linear,
+      todoist,
+      metrics,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPollCycle).toHaveBeenLastCalledWith(expect.objectContaining({ trigger: 'scheduled' }));
+      scheduler.requestPoll();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPollCycle).toHaveBeenLastCalledWith(expect.objectContaining({ trigger: 'webhook' }));
+    } finally {
+      scheduler.stop();
+    }
+  });
+
+  // Otherwise a scheduled poll would fire seconds after a webhook already reconciled the same
+  // state, spending a full cycle to discover there is nothing to do.
+  it('pushes the fallback timer out when a webhook triggers a poll', async () => {
+    vi.useFakeTimers();
+    const { linear, todoist, metrics } = fakePorts();
+    const scheduler = startScheduler({
+      config: { pollIntervalSeconds: 60, digestTime: '23:59', digestTimezone: 'UTC' },
+      linear,
+      todoist,
+      metrics,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPollCycle).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(50_000); // 10s short of the scheduled poll
+      scheduler.requestPoll();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPollCycle).toHaveBeenCalledTimes(2);
+
+      // The original fallback would have fired here; it should have been re-armed instead.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(runPollCycle).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(50_000);
+      expect(runPollCycle).toHaveBeenCalledTimes(3);
+    } finally {
+      scheduler.stop();
+    }
+  });
+
   it('stops both timers so no further calls happen after stop()', async () => {
     vi.useFakeTimers();
     const { linear, todoist, metrics } = fakePorts();

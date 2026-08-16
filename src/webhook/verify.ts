@@ -13,8 +13,7 @@ export type LinearWebhookPayload = {
 export type VerifyFailure = 'signature' | 'stale' | 'malformed';
 
 export type VerifyResult =
-  | { ok: true; payload: LinearWebhookPayload }
-  | { ok: false; reason: VerifyFailure };
+  { ok: true; payload: LinearWebhookPayload } | { ok: false; reason: VerifyFailure };
 
 /** Linear sends a bare lowercase hex HMAC-SHA256 digest - no "sha256=" prefix, unlike GitHub. */
 const SIGNATURE_PATTERN = /^[0-9a-f]{64}$/i;

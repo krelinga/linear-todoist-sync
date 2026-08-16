@@ -1,5 +1,5 @@
 import { Lock } from './lock.js';
-import { runPollCycle } from './reconcile/poll.js';
+import { runPollCycle, type PollTrigger } from './reconcile/poll.js';
 import { runDigestJob } from './digest/digest.js';
 import { logger } from './logger.js';
 import type { LinearPort } from './clients/linear.js';
@@ -29,13 +29,41 @@ const DIGEST_CHECK_INTERVAL_MS = 60_000;
  * startup rather than waiting for the first interval to elapse: a fresh start should backfill
  * right away (§2.3), and a digest time that's already passed today shouldn't wait until tomorrow.
  */
-export function startScheduler(deps: SchedulerDeps): { stop: () => void } {
+export type Scheduler = {
+  stop: () => void;
+  /**
+   * Runs a reconciliation cycle now, labelled as webhook-triggered. Callers are expected to
+   * have coalesced already (see webhook/nudge.ts) - this does no debouncing of its own.
+   */
+  requestPoll: () => void;
+};
+
+export function startScheduler(deps: SchedulerDeps): Scheduler {
   const lock = new Lock();
   let lastDigestLocalDate: string | null = null;
+  let pollTimer: NodeJS.Timeout | null = null;
 
-  const runPoll = (): void => {
+  const armPollTimer = (): void => {
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+    }
+    pollTimer = setTimeout(() => runPoll('scheduled'), deps.config.pollIntervalSeconds * 1000);
+  };
+
+  const runPoll = (trigger: PollTrigger): void => {
+    // Re-armed from now rather than on a fixed interval, so a webhook-triggered cycle pushes the
+    // fallback out instead of leaving a scheduled poll to fire seconds later over state that was
+    // just reconciled.
+    armPollTimer();
     lock
-      .run(() => runPollCycle({ linear: deps.linear, todoist: deps.todoist, metrics: deps.metrics }))
+      .run(() =>
+        runPollCycle({
+          linear: deps.linear,
+          todoist: deps.todoist,
+          metrics: deps.metrics,
+          trigger,
+        }),
+      )
       .catch((err: unknown) => {
         logger.error('Unhandled poll cycle error', {
           error: err instanceof Error ? err.message : String(err),
@@ -50,7 +78,9 @@ export function startScheduler(deps: SchedulerDeps): { stop: () => void } {
     }
     lastDigestLocalDate = date;
     lock
-      .run(() => runDigestJob({ linear: deps.linear, todoist: deps.todoist, metrics: deps.metrics }))
+      .run(() =>
+        runDigestJob({ linear: deps.linear, todoist: deps.todoist, metrics: deps.metrics }),
+      )
       .catch((err: unknown) => {
         logger.error('Unhandled digest job error', {
           error: err instanceof Error ? err.message : String(err),
@@ -58,17 +88,20 @@ export function startScheduler(deps: SchedulerDeps): { stop: () => void } {
       });
   };
 
-  runPoll();
+  runPoll('scheduled');
   checkDigest();
 
-  const pollTimer = setInterval(runPoll, deps.config.pollIntervalSeconds * 1000);
   const digestTimer = setInterval(checkDigest, DIGEST_CHECK_INTERVAL_MS);
 
   return {
     stop: () => {
-      clearInterval(pollTimer);
+      if (pollTimer !== null) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
       clearInterval(digestTimer);
     },
+    requestPoll: () => runPoll('webhook'),
   };
 }
 
