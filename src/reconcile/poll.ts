@@ -7,14 +7,22 @@ import type { TodoistPort } from '../clients/todoist.js';
 import type { Metrics } from '../metrics.js';
 import type { TodoistProjectSummary } from '../types.js';
 
+/**
+ * What caused this cycle to run. Reconciliation is identical either way - this only labels the
+ * metric, so "how much of my reconciliation is push-driven now" is answerable.
+ */
+export type PollTrigger = 'scheduled' | 'webhook';
+
 export type PollDeps = {
   linear: LinearPort;
   todoist: TodoistPort;
   metrics: Metrics;
+  trigger?: PollTrigger;
 };
 
 /** One full reconciliation cycle (§5): discover -> plan -> apply -> update health metrics. */
 export async function runPollCycle(deps: PollDeps): Promise<void> {
+  const trigger = deps.trigger ?? 'scheduled';
   const stopTimer = deps.metrics.pollDurationSeconds.startTimer();
   let success = true;
   try {
@@ -42,7 +50,7 @@ export async function runPollCycle(deps: PollDeps): Promise<void> {
     logger.error('Poll cycle failed', { error: err instanceof Error ? err.message : String(err) });
   } finally {
     stopTimer();
-    deps.metrics.pollRunsTotal.inc({ result: success ? 'success' : 'error' });
+    deps.metrics.pollRunsTotal.inc({ result: success ? 'success' : 'error', trigger });
     deps.metrics.lastPollResult.set(success ? 1 : 0);
     if (success) {
       deps.metrics.lastPollSuccessTimestampSeconds.set(Date.now() / 1000);

@@ -29,8 +29,27 @@ export function createMetrics(registry: Registry = new Registry()) {
 
   const pollRunsTotal = new Counter({
     name: 'sync_poll_runs_total',
-    help: 'Total number of poll cycles, by result.',
+    help: 'Total number of poll cycles, by result and what triggered them.',
+    labelNames: ['result', 'trigger'] as const,
+    registers: [registry],
+  });
+
+  const webhookDeliveriesTotal = new Counter({
+    name: 'sync_webhook_deliveries_total',
+    help: 'Total number of inbound webhook deliveries, by how they were handled.',
     labelNames: ['result'] as const,
+    registers: [registry],
+  });
+
+  const webhookPollsTriggeredTotal = new Counter({
+    name: 'sync_webhook_polls_triggered_total',
+    help: 'Poll cycles actually started by a webhook nudge, after coalescing.',
+    registers: [registry],
+  });
+
+  const lastWebhookReceivedTimestampSeconds = new Gauge({
+    name: 'sync_last_webhook_received_timestamp_seconds',
+    help: 'Unix time of the last verified webhook delivery. Diagnostic only - a quiet workspace and a broken webhook look identical here.',
     registers: [registry],
   });
 
@@ -81,6 +100,9 @@ export function createMetrics(registry: Registry = new Registry()) {
     lastDigestRunTimestampSeconds,
     lastDigestResult,
     pollRunsTotal,
+    webhookDeliveriesTotal,
+    webhookPollsTriggeredTotal,
+    lastWebhookReceivedTimestampSeconds,
     pollDurationSeconds,
     reconcileActionsTotal,
     digestCommentsPostedTotal,

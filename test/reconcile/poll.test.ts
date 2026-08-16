@@ -91,7 +91,24 @@ describe('runPollCycle', () => {
     expect(successTimestamp).toBeGreaterThan(0);
     const runs = (await metrics.pollRunsTotal.get()).values;
     expect(runs).toEqual(
-      expect.arrayContaining([expect.objectContaining({ labels: { result: 'success' }, value: 1 })]),
+      expect.arrayContaining([
+        expect.objectContaining({ labels: { result: 'success', trigger: 'scheduled' }, value: 1 }),
+      ]),
+    );
+  });
+
+  it('labels the run with the trigger that caused it', async () => {
+    const linear = fakeLinear();
+    const todoist = fakeTodoist();
+    const metrics = createMetrics();
+
+    await runPollCycle({ linear, todoist, metrics, trigger: 'webhook' });
+
+    const runs = (await metrics.pollRunsTotal.get()).values;
+    expect(runs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ labels: { result: 'success', trigger: 'webhook' }, value: 1 }),
+      ]),
     );
   });
 
@@ -108,7 +125,9 @@ describe('runPollCycle', () => {
     expect(await gaugeValue(metrics, 'sync_last_poll_success_timestamp_seconds', {})).toBe(0);
     const runs = (await metrics.pollRunsTotal.get()).values;
     expect(runs).toEqual(
-      expect.arrayContaining([expect.objectContaining({ labels: { result: 'error' }, value: 1 })]),
+      expect.arrayContaining([
+        expect.objectContaining({ labels: { result: 'error', trigger: 'scheduled' }, value: 1 }),
+      ]),
     );
   });
 
