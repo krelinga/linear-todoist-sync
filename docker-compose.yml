@@ -3,6 +3,11 @@ services:
     build: .
     restart: unless-stopped
     environment:
+      # Renders log timestamps in local time with their UTC offset, so a line reads directly
+      # against an alert notification. Unset means UTC, as before. Separate from
+      # DIGEST_TIMEZONE on purpose: that one decides when the digest runs, this one only
+      # decides how a timestamp is printed.
+      TZ: "America/Chicago"
       LINEAR_API_KEY: ${LINEAR_API_KEY}
       TODOIST_API_TOKEN: ${TODOIST_API_TOKEN}
       POLL_INTERVAL_SECONDS: 60

@@ -24,6 +24,7 @@ Copy `.env.example` to `.env` and fill in both API tokens:
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
+| `TZ` | no | `UTC` | IANA time zone log timestamps are rendered in. Standard Node/Docker variable, not read by the service's own config |
 | `LINEAR_API_KEY` | yes | - | Personal API token from [Linear settings](https://linear.app/settings/account/security) |
 | `TODOIST_API_TOKEN` | yes | - | Personal API token from [Todoist integration settings](https://app.todoist.com/app/settings/integrations/developer) |
 | `POLL_INTERVAL_SECONDS` | no | `60` | How often the reconciliation loop runs |
@@ -38,6 +39,29 @@ Copy `.env.example` to `.env` and fill in both API tokens:
 Setting any `WEBHOOK_*` variable without `LINEAR_WEBHOOK_SECRET` is a startup
 error rather than a silent no-op — that combination always means someone
 believed the receiver was running when it was not.
+
+`TZ` and `DIGEST_TIMEZONE` are deliberately separate settings. `TZ` only
+changes how a log timestamp is *printed*; `DIGEST_TIMEZONE` decides when the
+digest actually runs. Set both to your own zone in a typical single-user
+deployment, but changing one is never meant to move the other.
+
+### Log format
+
+One JSON object per line, timestamp first, `warn` and `error` on stderr and
+everything else on stdout:
+
+```json
+{"timestamp":"2026-09-11T08:42:13.123-05:00","level":"info","message":"Scheduler started","pollIntervalSeconds":60}
+```
+
+Timestamps are ISO 8601 in `TZ`, with the UTC offset always included — that
+offset is what keeps a line unambiguous across a DST changeover and lets any
+parser place it on an absolute timeline. With `TZ` unset the offset reads
+`+00:00` and the rendering is UTC.
+
+Note that this is display only. Everything the service *stores* or sends —
+the digest watermark, the Todoist completion window, the Prometheus timestamp
+gauges — stays UTC regardless of `TZ`.
 
 ## Running with Docker (recommended)
 
