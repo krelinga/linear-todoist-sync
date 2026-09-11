@@ -44,8 +44,9 @@ services:
     depends_on:
       - tailscale
     environment:
-      # Log timestamps in local time with their UTC offset; unset means UTC. See
-      # docker-compose.yml for why this is separate from DIGEST_TIMEZONE.
+      # Log timestamps in local time with their UTC offset. Set it explicitly rather than
+      # relying on the host zone - see docker-compose.yml for why, and for why this is
+      # separate from DIGEST_TIMEZONE.
       TZ: "America/Chicago"
       LINEAR_API_KEY: ${LINEAR_API_KEY}
       TODOIST_API_TOKEN: ${TODOIST_API_TOKEN}

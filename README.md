@@ -24,7 +24,7 @@ Copy `.env.example` to `.env` and fill in both API tokens:
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `TZ` | no | `UTC` | IANA time zone log timestamps are rendered in. Standard Node/Docker variable, not read by the service's own config |
+| `TZ` | no | host zone | IANA time zone log timestamps are rendered in. Standard Node/Docker variable, not read by the service's own config. Set it explicitly — see [Log format](#log-format) |
 | `LINEAR_API_KEY` | yes | - | Personal API token from [Linear settings](https://linear.app/settings/account/security) |
 | `TODOIST_API_TOKEN` | yes | - | Personal API token from [Todoist integration settings](https://app.todoist.com/app/settings/integrations/developer) |
 | `POLL_INTERVAL_SECONDS` | no | `60` | How often the reconciliation loop runs |
@@ -54,10 +54,17 @@ everything else on stdout:
 {"timestamp":"2026-09-11T08:42:13.123-05:00","level":"info","message":"Scheduler started","pollIntervalSeconds":60}
 ```
 
-Timestamps are ISO 8601 in `TZ`, with the UTC offset always included — that
-offset is what keeps a line unambiguous across a DST changeover and lets any
-parser place it on an absolute timeline. With `TZ` unset the offset reads
-`+00:00` and the rendering is UTC.
+Timestamps are ISO 8601 in the process's local zone, with the UTC offset
+always included — that offset is what keeps a line unambiguous across a DST
+changeover and lets any parser place it on an absolute timeline.
+
+**Set `TZ` explicitly.** Unset does not mean UTC; it means whatever zone the
+host is configured for. That happens to be UTC in the stock container image,
+but it is your own zone when running `npm start` locally — and if you
+bind-mount `/etc/localtime` into the container instead of setting `TZ`, Node
+has no `tzdata` to resolve it against and silently guesses the wrong zone
+(`America/Chicago` comes out as UTC-7). Setting `TZ` sidesteps all of this and
+needs nothing added to the image.
 
 Note that this is display only. Everything the service *stores* or sends —
 the digest watermark, the Todoist completion window, the Prometheus timestamp

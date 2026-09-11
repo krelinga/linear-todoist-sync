@@ -15,10 +15,16 @@ function pad(value: number, width = 2): string {
  * and it keeps every ISO 8601 parser able to place the line on an absolute timeline. It is
  * recomputed per line, so the autumn changeover is reflected from the next line onward.
  *
- * The zone comes from the standard `TZ` environment variable, which Node's bundled ICU resolves
- * without the Alpine `tzdata` package (verified against `node:24-alpine`). That makes it a
- * deployment setting rather than a config option — see `docker-compose.yml`. With `TZ` unset the
- * offset is `+00:00` and the rendering is UTC, exactly as it was before.
+ * The zone is the process's local zone, which the standard `TZ` environment variable sets. Node's
+ * bundled ICU resolves a `TZ` name without the Alpine `tzdata` package (verified against
+ * `node:24-alpine`), which is what makes this a deployment setting rather than a config option —
+ * see `docker-compose.yml`.
+ *
+ * `TZ` unset does NOT mean UTC. It means "whatever zone the host is configured for", which is UTC
+ * in the stock image but is the developer's own zone under `npm start`, and is a *misdetected*
+ * zone on this image if `/etc/localtime` is bind-mounted without `tzdata` also installed — ICU
+ * then guesses, and guesses wrong (`America/Chicago` resolves to UTC-7). Set `TZ` explicitly and
+ * none of that applies; leave it unset and the rendering follows the host.
  *
  * Only the *rendering* of log lines is local. Everything the service stores or sends stays UTC —
  * the `lastDigestAt` watermark (§6.1), the Todoist completion window (§7), the Prometheus
