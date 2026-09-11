@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { verifyDelivery } from './verify.js';
+import { errorFields } from '../errors.js';
 import { logger } from '../logger.js';
 import type { WebhookConfig } from '../config.js';
 import type { Metrics } from '../metrics.js';
@@ -85,7 +86,12 @@ export function createWebhookServer(deps: WebhookServerDeps): Server {
       .then((rawBody) => {
         if (rawBody === null) {
           deps.metrics.webhookDeliveriesTotal.inc({ result: 'rejected_malformed' });
-          logger.warn('Rejected oversized webhook delivery', { system: 'webhook' });
+          logger.warn('Rejected oversized webhook delivery', {
+            system: 'webhook',
+            path: pathname,
+            remoteAddress: req.socket.remoteAddress,
+            maxBodyBytes: MAX_BODY_BYTES,
+          });
           res.writeHead(413);
           res.end();
           return;
@@ -101,7 +107,13 @@ export function createWebhookServer(deps: WebhookServerDeps): Server {
             result: isProbe ? 'probe' : `rejected_${result.reason}`,
           });
           if (!isProbe) {
-            logger.warn('Rejected webhook delivery', { system: 'webhook', reason: result.reason });
+            logger.warn('Rejected webhook delivery', {
+              system: 'webhook',
+              reason: result.reason,
+              path: pathname,
+              remoteAddress: req.socket.remoteAddress,
+              userAgent,
+            });
           }
           res.writeHead(401);
           res.end();
@@ -125,7 +137,11 @@ export function createWebhookServer(deps: WebhookServerDeps): Server {
       .catch((err: unknown) => {
         logger.error('Webhook request failed', {
           system: 'webhook',
-          error: err instanceof Error ? err.message : String(err),
+          method: req.method,
+          path: pathname,
+          remoteAddress: req.socket.remoteAddress,
+          responded: res.headersSent,
+          ...errorFields(err),
         });
         if (!res.headersSent) {
           res.writeHead(500);

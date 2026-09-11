@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runDigestJob } from '../../src/digest/digest.js';
 import { createMetrics } from '../../src/metrics.js';
+import { logger } from '../../src/logger.js';
+
+vi.mock('../../src/logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 import type { LinearPort } from '../../src/clients/linear.js';
 import type { TodoistPort } from '../../src/clients/todoist.js';
 import type {
@@ -80,7 +85,9 @@ describe('runDigestJob', () => {
     const todoist = fakeTodoist({
       getCompletedTasksSince: vi
         .fn()
-        .mockResolvedValue([{ content: 'Done thing', completedAt: '2026-08-09T00:00:00.000Z', sectionId: null }]),
+        .mockResolvedValue([
+          { content: 'Done thing', completedAt: '2026-08-09T00:00:00.000Z', sectionId: null },
+        ]),
     });
     const metrics = createMetrics();
 
@@ -93,7 +100,11 @@ describe('runDigestJob', () => {
     expect(linear.updateAttachment).toHaveBeenCalledWith('att-1', {
       title: '[ENG-1] Fix the thing',
       subtitle: '2 tasks outstanding',
-      metadata: expect.objectContaining({ syncApp: 'linear-todoist-sync', schemaVersion: 1, lastDigestAt: expect.any(String) }),
+      metadata: expect.objectContaining({
+        syncApp: 'linear-todoist-sync',
+        schemaVersion: 1,
+        lastDigestAt: expect.any(String),
+      }),
     });
     expect((await metrics.digestCommentsPostedTotal.get()).values[0]?.value).toBe(1);
     expect(await gaugeValue(metrics, 'sync_last_digest_result')).toBe(1);
@@ -104,7 +115,15 @@ describe('runDigestJob', () => {
     const linear = fakeLinear({
       getMarkerAttachment: vi
         .fn()
-        .mockResolvedValue(attachment({ metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1, lastDigestAt: '2026-08-08T00:00:00.000Z' } })),
+        .mockResolvedValue(
+          attachment({
+            metadata: {
+              syncApp: 'linear-todoist-sync',
+              schemaVersion: 1,
+              lastDigestAt: '2026-08-08T00:00:00.000Z',
+            },
+          }),
+        ),
     });
     const getCompletedTasksSince = vi.fn().mockResolvedValue([]);
     const todoist = fakeTodoist({ getCompletedTasksSince });
@@ -171,9 +190,15 @@ describe('runDigestJob', () => {
 
   it('excludes mappings whose matched project is archived', async () => {
     const linear = fakeLinear();
-    const getCompletedTasksSince = vi.fn().mockResolvedValue([
-      { content: 'Should not be reported', completedAt: '2026-08-09T00:00:00.000Z', sectionId: null },
-    ]);
+    const getCompletedTasksSince = vi
+      .fn()
+      .mockResolvedValue([
+        {
+          content: 'Should not be reported',
+          completedAt: '2026-08-09T00:00:00.000Z',
+          sectionId: null,
+        },
+      ]);
     const todoist = fakeTodoist({
       getMarkedProjects: vi.fn().mockResolvedValue([project({ isArchived: true })]),
       getCompletedTasksSince,
@@ -198,20 +223,29 @@ describe('runDigestJob', () => {
   });
 
   it('continues to the next mapping and marks the run failed when one mapping errors', async () => {
-    const secondIssue = issue({ id: 'issue-2', identifier: 'ENG-2', url: 'https://linear.app/acme/issue/ENG-2' });
+    const secondIssue = issue({
+      id: 'issue-2',
+      identifier: 'ENG-2',
+      url: 'https://linear.app/acme/issue/ENG-2',
+    });
     const secondProject = project({
       id: 'proj-2',
       description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-2',
     });
     const linear = fakeLinear({
       getStartedIssues: vi.fn().mockResolvedValue([issue(), secondIssue]),
-      createComment: vi.fn().mockRejectedValueOnce(new Error('linear down')).mockResolvedValue(undefined),
+      createComment: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('linear down'))
+        .mockResolvedValue(undefined),
     });
     const todoist = fakeTodoist({
       getMarkedProjects: vi.fn().mockResolvedValue([project(), secondProject]),
       getCompletedTasksSince: vi
         .fn()
-        .mockResolvedValue([{ content: 'Done thing', completedAt: '2026-08-09T00:00:00.000Z', sectionId: null }]),
+        .mockResolvedValue([
+          { content: 'Done thing', completedAt: '2026-08-09T00:00:00.000Z', sectionId: null },
+        ]),
     });
     const metrics = createMetrics();
 
@@ -219,5 +253,58 @@ describe('runDigestJob', () => {
 
     expect(linear.createComment).toHaveBeenCalledTimes(2);
     expect(await gaugeValue(metrics, 'sync_last_digest_result')).toBe(0);
+  });
+
+  describe('error context', () => {
+    afterEach(() => {
+      vi.mocked(logger.error).mockClear();
+    });
+
+    it("names the issue and project when one mapping's digest fails", async () => {
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachment: vi.fn().mockResolvedValue({
+          id: 'att-1',
+          url: project().url,
+          title: '[ENG-1] Fix the thing',
+          subtitle: '0 tasks outstanding',
+          metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
+        }),
+        createComment: vi.fn().mockRejectedValue(new Error('503 Service Unavailable')),
+      });
+      const todoist = fakeTodoist({
+        getMarkedProjects: vi.fn().mockResolvedValue([project()]),
+        getCompletedTasksSince: vi
+          .fn()
+          .mockResolvedValue([
+            { content: 'Did a thing', completedAt: '2026-09-01T00:00:00.000Z', sectionId: null },
+          ]),
+      });
+
+      await runDigestJob({ linear, todoist, metrics: createMetrics() });
+
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to run digest for mapping',
+        expect.objectContaining({
+          issue: 'ENG-1',
+          todoistProject: project().name,
+          todoistProjectId: project().id,
+          error: '503 Service Unavailable',
+        }),
+      );
+    });
+
+    it('says which discovery step failed when the job aborts before any mapping', async () => {
+      const todoist = fakeTodoist({
+        getMarkedProjects: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
+      });
+
+      await runDigestJob({ linear: fakeLinear(), todoist, metrics: createMetrics() });
+
+      expect(logger.error).toHaveBeenCalledWith('Digest job failed', {
+        phase: 'discover',
+        error: 'Failed to list marked Todoist projects (phase=discover): 401 Unauthorized',
+      });
+    });
   });
 });

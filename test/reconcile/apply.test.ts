@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyActions } from '../../src/reconcile/apply.js';
+import { logger } from '../../src/logger.js';
 import { createMetrics } from '../../src/metrics.js';
+
+vi.mock('../../src/logger.js', () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 import type { LinearPort } from '../../src/clients/linear.js';
 import type { TodoistPort } from '../../src/clients/todoist.js';
 import type {
@@ -28,7 +33,8 @@ function project(overrides: Partial<TodoistProjectSummary> = {}): TodoistProject
     id: 'proj-1',
     name: '[ENG-1] Fix the flaky login test',
     url: 'https://todoist.com/showProject?id=proj-1',
-    description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
+    description:
+      'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
     isArchived: false,
     ...overrides,
   };
@@ -92,7 +98,8 @@ describe('applyActions', () => {
     expect(result).toEqual({ succeeded: 1, failed: 0 });
     expect(todoist.createProject).toHaveBeenCalledWith({
       name: '[ENG-1] Fix the flaky login test',
-      description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
+      description:
+        'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
     });
     expect(linear.createAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -110,7 +117,11 @@ describe('applyActions', () => {
     const todoist = fakeTodoist();
     const metrics = createMetrics();
     const actions: Action[] = [
-      { kind: 'recreate_project', issue: issue(), previousProjectUrl: 'https://todoist.com/showProject?id=old' },
+      {
+        kind: 'recreate_project',
+        issue: issue(),
+        previousProjectUrl: 'https://todoist.com/showProject?id=old',
+      },
     ];
 
     await applyActions(actions, { linear, todoist, metrics });
@@ -127,7 +138,9 @@ describe('applyActions', () => {
   describe('unarchive_project', () => {
     it('unarchives and refreshes an existing card with a fresh count', async () => {
       const linear = fakeLinear({
-        getMarkerAttachment: vi.fn().mockResolvedValue(attachment({ subtitle: '0 tasks outstanding' })),
+        getMarkerAttachment: vi
+          .fn()
+          .mockResolvedValue(attachment({ subtitle: '0 tasks outstanding' })),
       });
       const todoist = fakeTodoist({
         getOutstandingTasks: vi.fn().mockResolvedValue({ tasks: [task()], sections: [] }),
@@ -175,7 +188,9 @@ describe('applyActions', () => {
   it('creates a card with a fresh count for reattach_card', async () => {
     const linear = fakeLinear();
     const todoist = fakeTodoist({
-      getOutstandingTasks: vi.fn().mockResolvedValue({ tasks: [task(), task({ id: 't2' })], sections: [] }),
+      getOutstandingTasks: vi
+        .fn()
+        .mockResolvedValue({ tasks: [task(), task({ id: 't2' })], sections: [] }),
     });
     const metrics = createMetrics();
     const actions: Action[] = [{ kind: 'reattach_card', issue: issue(), project: project() }];
@@ -238,7 +253,9 @@ describe('applyActions', () => {
         }),
       });
       const metrics = createMetrics();
-      const actions: Action[] = [{ kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' }];
+      const actions: Action[] = [
+        { kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' },
+      ];
 
       await applyActions(actions, { linear, todoist, metrics });
 
@@ -267,7 +284,9 @@ describe('applyActions', () => {
       const linear = fakeLinear({ getMarkerAttachment: vi.fn().mockResolvedValue(attachment()) });
       const todoist = fakeTodoist();
       const metrics = createMetrics();
-      const actions: Action[] = [{ kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' }];
+      const actions: Action[] = [
+        { kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' },
+      ];
 
       await applyActions(actions, { linear, todoist, metrics });
 
@@ -279,7 +298,9 @@ describe('applyActions', () => {
       const linear = fakeLinear({ getMarkerAttachment: vi.fn().mockResolvedValue(null) });
       const todoist = fakeTodoist();
       const metrics = createMetrics();
-      const actions: Action[] = [{ kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' }];
+      const actions: Action[] = [
+        { kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' },
+      ];
 
       await applyActions(actions, { linear, todoist, metrics });
 
@@ -317,5 +338,68 @@ describe('applyActions', () => {
 
     expect(result).toEqual({ succeeded: 1, failed: 1 });
     expect(todoist.updateProject).toHaveBeenCalledTimes(2);
+  });
+
+  describe('error context', () => {
+    afterEach(() => {
+      vi.mocked(logger.error).mockClear();
+    });
+
+    it('logs the issue and project a failed action was about', async () => {
+      const linear = fakeLinear({
+        createAttachment: vi
+          .fn()
+          .mockRejectedValue(
+            new Error('Entity not found: Issue - Could not find referenced Issue.'),
+          ),
+      });
+      const todoist = fakeTodoist();
+      const actions: Action[] = [{ kind: 'reattach_card', issue: issue(), project: project() }];
+
+      const result = await applyActions(actions, { linear, todoist, metrics: createMetrics() });
+
+      expect(result).toEqual({ succeeded: 0, failed: 1 });
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to apply reconciliation action',
+        expect.objectContaining({
+          action: 'reattach_card',
+          issue: 'ENG-1',
+          issueId: 'issue-1',
+          todoistProject: '[ENG-1] Fix the flaky login test',
+          todoistProjectId: 'proj-1',
+          error: 'Entity not found: Issue - Could not find referenced Issue.',
+        }),
+      );
+    });
+
+    it('names the project for an action that carries no issue', async () => {
+      const todoist = fakeTodoist({
+        updateProject: vi.fn().mockRejectedValue(new Error('404 Not Found')),
+      });
+      const actions: Action[] = [{ kind: 'mark_lost', project: project({ id: 'proj-9' }) }];
+
+      await applyActions(actions, { linear: fakeLinear(), todoist, metrics: createMetrics() });
+
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to apply reconciliation action',
+        expect.objectContaining({ action: 'mark_lost', todoistProjectId: 'proj-9' }),
+      );
+    });
+
+    it('falls back to linkedIssueId for archive_project, which carries no issue summary', async () => {
+      const todoist = fakeTodoist({
+        archiveProject: vi.fn().mockRejectedValue(new Error('500 Internal Server Error')),
+      });
+      const actions: Action[] = [
+        { kind: 'archive_project', project: project(), linkedIssueId: 'issue-42' },
+      ];
+
+      await applyActions(actions, { linear: fakeLinear(), todoist, metrics: createMetrics() });
+
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to apply reconciliation action',
+        expect.objectContaining({ action: 'archive_project', issueId: 'issue-42' }),
+      );
+    });
   });
 });

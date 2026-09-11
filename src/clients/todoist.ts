@@ -1,5 +1,6 @@
 import { extractHttpStatus, httpRetryClassifier, withRetry } from '../retry.js';
 import { LINKED_ISSUE_MARKER_PREFIX } from '../naming.js';
+import { ContextualError, type ErrorContext } from '../errors.js';
 import { logger } from '../logger.js';
 import type { Metrics } from '../metrics.js';
 import type {
@@ -113,7 +114,15 @@ export class TodoistClient implements TodoistPort {
     private readonly metrics?: Metrics,
   ) {}
 
-  private async call<T>(fn: () => Promise<T>): Promise<T> {
+  /**
+   * `operation` and `context` name the REST call and the arguments it was given, so a failure
+   * identifies the project it was about rather than only what went wrong (see errors.ts).
+   */
+  private async call<T>(
+    operation: string,
+    context: ErrorContext,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     const stopTimer = this.metrics?.apiRequestDurationSeconds.startTimer({ service: 'todoist' });
     try {
       const result = await withRetry(fn, { classify: httpRetryClassifier });
@@ -125,19 +134,27 @@ export class TodoistClient implements TodoistPort {
         service: 'todoist',
         result: status === 429 ? 'rate_limited' : 'error',
       });
-      throw err;
+      throw new ContextualError(
+        'Todoist API request failed',
+        { system: 'todoist', operation, ...context, httpStatus: status },
+        err,
+      );
     } finally {
       stopTimer?.();
     }
   }
 
   private async fetchAllProjects(
+    operation: string,
     fetchPage: (cursor: string | null) => Promise<RawProjectPage>,
   ): Promise<RawProject[]> {
     const projects: RawProject[] = [];
     let cursor: string | null = null;
     for (;;) {
-      const page = await this.call(() => fetchPage(cursor));
+      // Annotated rather than inferred: `cursor` is narrowed by the assignment at the bottom of
+      // the loop, and reading it directly in the context argument would make `page`'s inferred
+      // type depend on itself.
+      const page: RawProjectPage = await this.call(operation, { cursor }, () => fetchPage(cursor));
       projects.push(...page.results);
       if (!page.nextCursor) {
         break;
@@ -149,8 +166,10 @@ export class TodoistClient implements TodoistPort {
 
   async getMarkedProjects(): Promise<TodoistProjectSummary[]> {
     const [active, archived] = await Promise.all([
-      this.fetchAllProjects((cursor) => this.sdk.getProjects({ cursor })),
-      this.fetchAllProjects((cursor) => this.sdk.getArchivedProjects({ cursor })),
+      this.fetchAllProjects('getProjects', (cursor) => this.sdk.getProjects({ cursor })),
+      this.fetchAllProjects('getArchivedProjects', (cursor) =>
+        this.sdk.getArchivedProjects({ cursor }),
+      ),
     ]);
     return [...active, ...archived]
       .filter((project) => project.description.startsWith(LINKED_ISSUE_MARKER_PREFIX))
@@ -158,7 +177,7 @@ export class TodoistClient implements TodoistPort {
   }
 
   async createProject(input: CreateProjectInput): Promise<TodoistProjectSummary> {
-    const project = await this.call(() =>
+    const project = await this.call('addProject', { name: input.name }, () =>
       this.sdk.addProject({ name: input.name, description: input.description }),
     );
     logger.info('Created Todoist project', {
@@ -170,24 +189,28 @@ export class TodoistClient implements TodoistPort {
   }
 
   async updateProject(id: string, input: UpdateProjectInput): Promise<void> {
-    await this.call(() => this.sdk.updateProject(id, input));
+    await this.call('updateProject', { projectId: id, ...input }, () =>
+      this.sdk.updateProject(id, input),
+    );
     logger.info('Updated Todoist project', { system: 'todoist', projectId: id, ...input });
   }
 
   async archiveProject(id: string): Promise<void> {
-    await this.call(() => this.sdk.archiveProject(id));
+    await this.call('archiveProject', { projectId: id }, () => this.sdk.archiveProject(id));
     logger.info('Archived Todoist project', { system: 'todoist', projectId: id });
   }
 
   async unarchiveProject(id: string): Promise<void> {
-    await this.call(() => this.sdk.unarchiveProject(id));
+    await this.call('unarchiveProject', { projectId: id }, () => this.sdk.unarchiveProject(id));
     logger.info('Unarchived Todoist project', { system: 'todoist', projectId: id });
   }
 
   async getOutstandingTasks(
     projectId: string,
   ): Promise<{ tasks: TodoistTaskSummary[]; sections: TodoistSectionSummary[] }> {
-    const full = await this.call(() => this.sdk.getFullProject(projectId));
+    const full = await this.call('getFullProject', { projectId }, () =>
+      this.sdk.getFullProject(projectId),
+    );
     return {
       tasks: full.tasks.map(toTaskSummary),
       sections: full.sections
@@ -205,13 +228,16 @@ export class TodoistClient implements TodoistPort {
     const completed: RawTask[] = [];
     let cursor: string | null = null;
     for (;;) {
-      const page = await this.call(() =>
-        this.sdk.getCompletedTasksByCompletionDate({
-          projectId,
-          since: sinceIso,
-          until: untilIso,
-          cursor,
-        }),
+      const page: RawCompletedTaskPage = await this.call(
+        'getCompletedTasksByCompletionDate',
+        { projectId, since: sinceIso, until: untilIso, cursor },
+        () =>
+          this.sdk.getCompletedTasksByCompletionDate({
+            projectId,
+            since: sinceIso,
+            until: untilIso,
+            cursor,
+          }),
       );
       completed.push(...page.items);
       if (!page.nextCursor) {
@@ -227,7 +253,9 @@ export class TodoistClient implements TodoistPort {
   }
 
   async addProjectComment(projectId: string, content: string): Promise<void> {
-    await this.call(() => this.sdk.addComment({ projectId, content }));
+    await this.call('addComment', { projectId, contentLength: content.length }, () =>
+      this.sdk.addComment({ projectId, content }),
+    );
     logger.info('Posted Todoist comment', {
       system: 'todoist',
       projectId,

@@ -1,6 +1,7 @@
 import { discover } from './discover.js';
 import { planActions } from './plan.js';
 import { applyActions } from './apply.js';
+import { errorFields } from '../errors.js';
 import { logger } from '../logger.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
@@ -47,7 +48,9 @@ export async function runPollCycle(deps: PollDeps): Promise<void> {
     );
   } catch (err) {
     success = false;
-    logger.error('Poll cycle failed', { error: err instanceof Error ? err.message : String(err) });
+    // Unlike a single failed action, this aborted the whole cycle - discovery itself failed, so
+    // no action was attempted. The wrapped error names which half of discovery, and for what.
+    logger.error('Poll cycle failed', { trigger, ...errorFields(err) });
   } finally {
     stopTimer();
     deps.metrics.pollRunsTotal.inc({ result: success ? 'success' : 'error', trigger });

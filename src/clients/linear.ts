@@ -1,5 +1,6 @@
 import { extractHttpStatus, httpRetryClassifier, withRetry } from '../retry.js';
 import { isMarkerAttachment } from '../naming.js';
+import { ContextualError, withContext, type ErrorContext } from '../errors.js';
 import { logger } from '../logger.js';
 import type { Metrics } from '../metrics.js';
 import type {
@@ -99,7 +100,16 @@ export class LinearClient implements LinearPort {
     private readonly metrics?: Metrics,
   ) {}
 
-  private async call<T>(fn: () => Promise<T>): Promise<T> {
+  /**
+   * `operation` and `context` name the GraphQL call and the arguments it was given. Linear's own
+   * errors describe the failure but never its subject, so without this an "Entity not found"
+   * reaches the log with no indication of which issue or attachment it was about.
+   */
+  private async call<T>(
+    operation: string,
+    context: ErrorContext,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     const stopTimer = this.metrics?.apiRequestDurationSeconds.startTimer({ service: 'linear' });
     try {
       const result = await withRetry(fn, { classify: httpRetryClassifier });
@@ -111,14 +121,25 @@ export class LinearClient implements LinearPort {
         service: 'linear',
         result: status === 429 ? 'rate_limited' : 'error',
       });
-      throw err;
+      throw new ContextualError(
+        'Linear API request failed',
+        { system: 'linear', operation, ...context, httpStatus: status },
+        err,
+      );
     } finally {
       stopTimer?.();
     }
   }
 
   private async resolveStateType(issue: RawIssue): Promise<string> {
-    const state = await issue.state;
+    // `issue.state` is a lazy SDK promise that can reject on its own. Not routed through `call`:
+    // it is an already-created promise, so retrying would re-await the same settled result, and
+    // it belongs to the request `call` already counted rather than being a request of its own.
+    const state = await withContext(
+      'Failed to resolve the workflow state of a Linear issue',
+      { system: 'linear', operation: 'issue.state', issueId: issue.id, issue: issue.identifier },
+      async () => issue.state,
+    );
     return state?.type ?? 'unknown';
   }
 
@@ -132,7 +153,9 @@ export class LinearClient implements LinearPort {
       if (after !== undefined) {
         variables.after = after;
       }
-      const page = await this.call(() => this.sdk.issues(variables));
+      const page = await this.call('issues', { stateFilter: 'started', after }, () =>
+        this.sdk.issues(variables),
+      );
       issues.push(...page.nodes);
       if (!page.pageInfo.hasNextPage || !page.pageInfo.endCursor) {
         break;
@@ -154,14 +177,18 @@ export class LinearClient implements LinearPort {
     if (!issue) {
       return null;
     }
-    const { nodes } = await this.call(() => issue.attachments());
+    const { nodes } = await this.call(
+      'issue.attachments',
+      { issueId, issue: issue.identifier },
+      () => issue.attachments(),
+    );
     const marker = nodes.find((attachment) => isMarkerAttachment(attachment.metadata));
     return marker ? toAttachmentSummary(marker) : null;
   }
 
   private async getIssueRaw(id: string): Promise<RawIssue | null> {
     try {
-      return await this.call(() => this.sdk.issue(id));
+      return await this.call('issue', { issueId: id }, () => this.sdk.issue(id));
     } catch (err) {
       const status = extractHttpStatus(err);
       if (status !== undefined && status >= 400 && status < 500) {
@@ -172,19 +199,28 @@ export class LinearClient implements LinearPort {
   }
 
   async createAttachment(input: CreateAttachmentInput): Promise<LinearAttachmentSummary> {
-    const payload = await this.call(() =>
-      this.sdk.createAttachment({
-        issueId: input.issueId,
-        title: input.title,
-        url: input.url,
-        iconUrl: input.iconUrl,
-        subtitle: input.subtitle,
-        metadata: input.metadata,
-      }),
+    const payload = await this.call(
+      'attachmentCreate',
+      { issueId: input.issueId, title: input.title, url: input.url },
+      () =>
+        this.sdk.createAttachment({
+          issueId: input.issueId,
+          title: input.title,
+          url: input.url,
+          iconUrl: input.iconUrl,
+          subtitle: input.subtitle,
+          metadata: input.metadata,
+        }),
     );
     const attachment = await payload.attachment;
     if (!attachment) {
-      throw new Error(`createAttachment for issue ${input.issueId} returned no attachment`);
+      throw new ContextualError('Linear attachmentCreate returned no attachment', {
+        system: 'linear',
+        operation: 'attachmentCreate',
+        issueId: input.issueId,
+        title: input.title,
+        url: input.url,
+      });
     }
     logger.info('Created Linear attachment', {
       system: 'linear',
@@ -196,7 +232,7 @@ export class LinearClient implements LinearPort {
   }
 
   async updateAttachment(id: string, input: UpdateAttachmentInput): Promise<void> {
-    await this.call(() =>
+    await this.call('attachmentUpdate', { attachmentId: id, title: input.title }, () =>
       this.sdk.updateAttachment(id, {
         title: input.title,
         subtitle: input.subtitle,
@@ -212,7 +248,9 @@ export class LinearClient implements LinearPort {
   }
 
   async createComment(issueId: string, body: string): Promise<void> {
-    await this.call(() => this.sdk.createComment({ issueId, body }));
+    await this.call('commentCreate', { issueId, bodyLength: body.length }, () =>
+      this.sdk.createComment({ issueId, body }),
+    );
     logger.info('Posted Linear comment', {
       system: 'linear',
       issueId,
