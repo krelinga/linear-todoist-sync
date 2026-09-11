@@ -1,6 +1,7 @@
 import { Lock } from './lock.js';
 import { runPollCycle, type PollTrigger } from './reconcile/poll.js';
 import { runDigestJob } from './digest/digest.js';
+import { errorFields } from './errors.js';
 import { logger } from './logger.js';
 import type { LinearPort } from './clients/linear.js';
 import type { TodoistPort } from './clients/todoist.js';
@@ -65,9 +66,9 @@ export function startScheduler(deps: SchedulerDeps): Scheduler {
         }),
       )
       .catch((err: unknown) => {
-        logger.error('Unhandled poll cycle error', {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        // runPollCycle catches its own failures, so reaching here means a bug in the cycle's own
+        // bookkeeping rather than an API failure - worth distinguishing from 'Poll cycle failed'.
+        logger.error('Unhandled poll cycle error', { trigger, ...errorFields(err) });
       });
   };
 
@@ -83,7 +84,9 @@ export function startScheduler(deps: SchedulerDeps): Scheduler {
       )
       .catch((err: unknown) => {
         logger.error('Unhandled digest job error', {
-          error: err instanceof Error ? err.message : String(err),
+          digestLocalDate: date,
+          digestTimezone: deps.config.digestTimezone,
+          ...errorFields(err),
         });
       });
   };

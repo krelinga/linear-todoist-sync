@@ -1,4 +1,5 @@
 import { parseLinkedIssueUrl } from '../naming.js';
+import { withContext } from '../errors.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
 import type { OrphanedProject, IssueMapping, Snapshot, TodoistProjectSummary } from '../types.js';
@@ -17,8 +18,12 @@ function parseIssueIdentifierFromUrl(url: string): string | null {
  */
 export async function discover(linear: LinearPort, todoist: TodoistPort): Promise<Snapshot> {
   const [issues, projects] = await Promise.all([
-    linear.getStartedIssues(),
-    todoist.getMarkedProjects(),
+    withContext('Failed to list started Linear issues', { phase: 'discover' }, () =>
+      linear.getStartedIssues(),
+    ),
+    withContext('Failed to list marked Todoist projects', { phase: 'discover' }, () =>
+      todoist.getMarkedProjects(),
+    ),
   ]);
 
   // Keyed by Linear issue identifier (e.g. "ENG-123"), not the full issue URL: the URL carries a
@@ -40,7 +45,18 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
       if (matchedProject) {
         matchedProjectIds.add(matchedProject.id);
       }
-      const attachment = await linear.getMarkerAttachment(issue.id);
+      const attachment = await withContext(
+        "Failed to read a started issue's Linear attachment card",
+        {
+          phase: 'discover',
+          issue: issue.identifier,
+          issueId: issue.id,
+          issueUrl: issue.url,
+          todoistProject: matchedProject?.name,
+          todoistProjectId: matchedProject?.id,
+        },
+        () => linear.getMarkerAttachment(issue.id),
+      );
       return { issue, matchedProject, attachment };
     }),
   );
@@ -50,7 +66,23 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
     orphanProjects.map(async (project) => {
       const issueUrl = parseLinkedIssueUrl(project.description);
       const identifier = issueUrl ? parseIssueIdentifierFromUrl(issueUrl) : null;
-      const linkedIssue = identifier ? await linear.getIssue(identifier) : null;
+      // The identifier here came out of the project's own description, so this lookup is the one
+      // place a stale or hand-edited link surfaces - name both sides, since the failure could be
+      // the project's link or the issue itself.
+      const linkedIssue = identifier
+        ? await withContext(
+            'Failed to look up the Linear issue linked from a Todoist project',
+            {
+              phase: 'discover',
+              todoistProject: project.name,
+              todoistProjectId: project.id,
+              todoistProjectUrl: project.url,
+              linkedIssue: identifier,
+              linkedIssueUrl: issueUrl,
+            },
+            () => linear.getIssue(identifier),
+          )
+        : null;
       return { project, linkedIssue };
     }),
   );

@@ -8,6 +8,7 @@ import type {
 } from '../../src/clients/todoist.js';
 import { createMetrics } from '../../src/metrics.js';
 import { logger } from '../../src/logger.js';
+import { errorFields } from '../../src/errors.js';
 
 vi.mock('../../src/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -55,7 +56,9 @@ describe('TodoistClient', () => {
       });
       const sdk = fakeSdk({
         getProjects: vi.fn().mockResolvedValue({ results: [marked, unrelated], nextCursor: null }),
-        getArchivedProjects: vi.fn().mockResolvedValue({ results: [archivedMarked], nextCursor: null }),
+        getArchivedProjects: vi
+          .fn()
+          .mockResolvedValue({ results: [archivedMarked], nextCursor: null }),
       });
       const client = new TodoistClient(sdk);
       const result = await client.getMarkedProjects();
@@ -88,7 +91,10 @@ describe('TodoistClient', () => {
       const getProjects = vi
         .fn()
         .mockResolvedValueOnce({ results: [rawProject({ id: 'a' })], nextCursor: 'cursor-1' })
-        .mockResolvedValueOnce({ results: [rawProject({ id: 'b' })], nextCursor: null } satisfies RawProjectPage);
+        .mockResolvedValueOnce({
+          results: [rawProject({ id: 'b' })],
+          nextCursor: null,
+        } satisfies RawProjectPage);
       const sdk = fakeSdk({ getProjects });
       const client = new TodoistClient(sdk);
       const result = await client.getMarkedProjects();
@@ -112,7 +118,11 @@ describe('TodoistClient', () => {
     expect(result.id).toBe('proj-1');
     expect(logger.info).toHaveBeenCalledWith(
       'Created Todoist project',
-      expect.objectContaining({ system: 'todoist', projectId: 'proj-1', name: '[ENG-1] Fix the thing' }),
+      expect.objectContaining({
+        system: 'todoist',
+        projectId: 'proj-1',
+        name: '[ENG-1] Fix the thing',
+      }),
     );
   });
 
@@ -222,5 +232,44 @@ describe('TodoistClient', () => {
         expect.objectContaining({ labels: { service: 'todoist', result: 'error' }, value: 1 }),
       ]),
     );
+  });
+
+  describe('error context', () => {
+    it('names the operation and project when a project write fails', async () => {
+      const client = new TodoistClient(
+        fakeSdk({ archiveProject: vi.fn().mockRejectedValue({ status: 404 }) }),
+      );
+
+      const err = await client.archiveProject('proj-7').catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain('operation=archiveProject');
+      expect((err as Error).message).toContain('projectId=proj-7');
+      expect(errorFields(err)).toMatchObject({
+        system: 'todoist',
+        operation: 'archiveProject',
+        projectId: 'proj-7',
+        httpStatus: 404,
+      });
+    });
+
+    it('names the date window when the completed-tasks query is rejected', async () => {
+      const client = new TodoistClient(
+        fakeSdk({
+          getCompletedTasksByCompletionDate: vi
+            .fn()
+            .mockRejectedValue(new Error('completion date range must not exceed 3 months')),
+        }),
+      );
+
+      const err = await client
+        .getCompletedTasksSince('proj-1', '2020-01-01T00:00:00.000Z')
+        .catch((e: unknown) => e);
+
+      expect(errorFields(err)).toMatchObject({
+        operation: 'getCompletedTasksByCompletionDate',
+        projectId: 'proj-1',
+        since: '2020-01-01T00:00:00.000Z',
+      });
+    });
   });
 });

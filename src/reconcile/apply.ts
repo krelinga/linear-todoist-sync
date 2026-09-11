@@ -7,6 +7,7 @@ import {
   markAsLost,
   TODOIST_ICON_URL,
 } from '../naming.js';
+import { errorFields, type ErrorContext } from '../errors.js';
 import { logger } from '../logger.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
@@ -44,11 +45,30 @@ export async function applyActions(actions: Action[], deps: ApplyDeps): Promise<
       failed++;
       logger.error('Failed to apply reconciliation action', {
         action: action.kind,
-        error: err instanceof Error ? err.message : String(err),
+        ...actionContext(action),
+        ...errorFields(err),
       });
     }
   }
   return { succeeded, failed };
+}
+
+/**
+ * The issue and project an action is about, for the log line when it fails. Every variant of
+ * Action carries an issue, a project, or both, so this stays exhaustive without a per-kind
+ * switch that would need updating alongside the union.
+ */
+function actionContext(action: Action): ErrorContext {
+  const issue = 'issue' in action ? action.issue : null;
+  const project = 'project' in action ? action.project : null;
+  return {
+    issue: issue?.identifier,
+    issueId: issue?.id ?? ('linkedIssueId' in action ? action.linkedIssueId : undefined),
+    issueUrl: issue?.url,
+    todoistProject: project?.name,
+    todoistProjectId: project?.id,
+    todoistProjectUrl: project?.url,
+  };
 }
 
 async function applyAction(action: Action, deps: ApplyDeps): Promise<void> {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { httpRetryClassifier, withRetry } from '../src/retry.js';
+import { extractHttpStatus, httpRetryClassifier, withRetry } from '../src/retry.js';
+import { ContextualError } from '../src/errors.js';
 
 function httpError(status: number, retryAfter?: string): unknown {
   return {
@@ -84,5 +85,36 @@ describe('httpRetryClassifier', () => {
 
   it('treats an error with no discernible status as not retryable', () => {
     expect(httpRetryClassifier(new Error('boom'))).toEqual({ retryable: false });
+  });
+});
+
+describe('extractHttpStatus', () => {
+  it('reads a status off the error itself', () => {
+    expect(extractHttpStatus(httpError(429))).toBe(429);
+    expect(extractHttpStatus({ statusCode: 503 })).toBe(503);
+    expect(extractHttpStatus({ response: { status: 404 } })).toBe(404);
+  });
+
+  it('finds a status through a wrapping ContextualError', () => {
+    // The clients wrap SDK errors for context, and getIssueRaw still has to tell a 4xx
+    // ("this issue is gone") apart from a 5xx ("try again next cycle") afterwards.
+    const wrapped = new ContextualError('Linear API request failed', {}, httpError(404));
+    expect(extractHttpStatus(wrapped)).toBe(404);
+  });
+
+  it('returns undefined for an error with no status anywhere in the chain', () => {
+    const wrapped = new ContextualError('outer', {}, new Error('inner'));
+    expect(extractHttpStatus(wrapped)).toBeUndefined();
+  });
+
+  it('terminates on a self-referential cause chain', () => {
+    const err = new Error('loop');
+    Object.defineProperty(err, 'cause', { value: err });
+    expect(extractHttpStatus(err)).toBeUndefined();
+  });
+
+  it('classifies a wrapped 429 as retryable', () => {
+    const wrapped = new ContextualError('outer', {}, httpError(429, '3'));
+    expect(httpRetryClassifier(wrapped)).toEqual({ retryable: true, retryAfterSeconds: 3 });
   });
 });

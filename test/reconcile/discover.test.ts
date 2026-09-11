@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { discover } from '../../src/reconcile/discover.js';
+import { errorFields } from '../../src/errors.js';
 import type { LinearPort } from '../../src/clients/linear.js';
 import type { TodoistPort } from '../../src/clients/todoist.js';
 import type {
@@ -180,4 +181,66 @@ describe('discover', () => {
     expect(snapshot.mappings[0]?.matchedProject).toEqual(matched);
     expect(snapshot.orphans).toEqual([{ project: other, linkedIssue: null }]);
   });
+
+  describe('error context', () => {
+    it("names the project and the issue when an orphan's linked issue lookup fails", async () => {
+      const orphanProject = project({
+        id: 'proj-7',
+        name: '[ENG-9] Other thing',
+        description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-9/other-thing',
+      });
+      const linear = fakeLinear({
+        getIssue: vi
+          .fn()
+          .mockRejectedValue(
+            new Error('Entity not found: Issue - Could not find referenced Issue.'),
+          ),
+      });
+      const todoist = fakeTodoist({
+        getMarkedProjects: vi.fn().mockResolvedValue([orphanProject]),
+      });
+
+      const err = await discover(linear, todoist).catch((e: unknown) => e);
+
+      expect(errorMessageOf(err)).toContain('Entity not found: Issue');
+      expect(errorFields(err)).toMatchObject({
+        phase: 'discover',
+        todoistProject: '[ENG-9] Other thing',
+        todoistProjectId: 'proj-7',
+        linkedIssue: 'ENG-9',
+        linkedIssueUrl: 'https://linear.app/acme/issue/ENG-9/other-thing',
+      });
+    });
+
+    it('names the issue when reading its attachment card fails', async () => {
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachment: vi.fn().mockRejectedValue(new Error('503 Service Unavailable')),
+      });
+
+      const err = await discover(linear, fakeTodoist()).catch((e: unknown) => e);
+
+      expect(errorFields(err)).toMatchObject({
+        phase: 'discover',
+        issue: 'ENG-1',
+        issueId: 'issue-1',
+      });
+    });
+
+    it('says which of the two listings failed', async () => {
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
+      });
+
+      const err = await discover(linear, fakeTodoist()).catch((e: unknown) => e);
+
+      expect(errorMessageOf(err)).toBe(
+        'Failed to list started Linear issues (phase=discover): 401 Unauthorized',
+      );
+    });
+  });
 });
+
+function errorMessageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

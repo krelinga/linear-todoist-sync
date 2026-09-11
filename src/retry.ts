@@ -1,4 +1,5 @@
-export type RetryClassification = { retryable: false } | { retryable: true; retryAfterSeconds?: number };
+export type RetryClassification =
+  { retryable: false } | { retryable: true; retryAfterSeconds?: number };
 
 export type RetryClassifier = (error: unknown) => RetryClassification;
 
@@ -57,45 +58,60 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions):
   }
 }
 
-export function extractHttpStatus(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null) {
-    return undefined;
+/**
+ * The error itself followed by its `cause` chain, so HTTP details survive being wrapped for
+ * context (see errors.ts): `getIssueRaw`'s "a 4xx means the issue is gone" check and the
+ * clients' rate_limited metric label both read a status back off an already-wrapped error.
+ * Depth-bounded, since an error whose `cause` points at itself would otherwise never terminate.
+ */
+function* causeChain(error: unknown): Generator<Record<string, unknown>> {
+  let current = error;
+  for (let depth = 0; depth < 10; depth++) {
+    if (typeof current !== 'object' || current === null) {
+      return;
+    }
+    yield current as Record<string, unknown>;
+    current = (current as { cause?: unknown }).cause;
   }
-  const candidates = [
-    (error as Record<string, unknown>)['status'],
-    (error as Record<string, unknown>)['statusCode'],
-    (error as { response?: Record<string, unknown> }).response?.['status'],
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === 'number') {
-      return candidate;
+}
+
+export function extractHttpStatus(error: unknown): number | undefined {
+  for (const link of causeChain(error)) {
+    const candidates = [
+      link['status'],
+      link['statusCode'],
+      (link as { response?: Record<string, unknown> }).response?.['status'],
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'number') {
+        return candidate;
+      }
     }
   }
   return undefined;
 }
 
 function extractRetryAfterSeconds(error: unknown): number | undefined {
-  if (typeof error !== 'object' || error === null) {
-    return undefined;
-  }
-  const headerSources = [
-    (error as { headers?: unknown }).headers,
-    (error as { response?: { headers?: unknown } }).response?.headers,
-  ];
-  for (const headers of headerSources) {
-    if (!headers) {
-      continue;
-    }
-    let raw: string | null | undefined;
-    if (typeof (headers as Headers).get === 'function') {
-      raw = (headers as Headers).get('retry-after');
-    } else {
-      raw = (headers as Record<string, string>)['retry-after'];
-    }
-    if (raw) {
-      const seconds = Number(raw);
-      if (Number.isFinite(seconds) && seconds >= 0) {
-        return seconds;
+  for (const link of causeChain(error)) {
+    const headerSources = [
+      link['headers'],
+      (link as { response?: { headers?: unknown } }).response?.headers,
+    ];
+    for (const headers of headerSources) {
+      if (!headers) {
+        continue;
+      }
+      let raw: string | null | undefined;
+      if (typeof (headers as Headers).get === 'function') {
+        raw = (headers as Headers).get('retry-after');
+      } else {
+        raw = (headers as Record<string, string>)['retry-after'];
+      }
+      if (raw) {
+        const seconds = Number(raw);
+        if (Number.isFinite(seconds) && seconds >= 0) {
+          return seconds;
+        }
       }
     }
   }
@@ -113,5 +129,7 @@ export function httpRetryClassifier(error: unknown): RetryClassification {
     return { retryable: false };
   }
   const retryAfterSeconds = extractRetryAfterSeconds(error);
-  return retryAfterSeconds === undefined ? { retryable: true } : { retryable: true, retryAfterSeconds };
+  return retryAfterSeconds === undefined
+    ? { retryable: true }
+    : { retryable: true, retryAfterSeconds };
 }

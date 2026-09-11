@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { LinearClient as LinearSdkClient } from '@linear/sdk';
 import { TodoistApi } from '@doist/todoist-sdk';
 import { loadConfig, ConfigError } from './config.js';
+import { errorFields } from './errors.js';
 import { logger } from './logger.js';
 import { createMetrics } from './metrics.js';
 import { LinearClient } from './clients/linear.js';
@@ -16,7 +17,7 @@ function main(): void {
     config = loadConfig();
   } catch (err) {
     if (err instanceof ConfigError) {
-      logger.error('Invalid configuration', { error: err.message });
+      logger.error('Invalid configuration', { error: err.message, source: 'environment' });
       process.exit(1);
     }
     throw err;
@@ -35,7 +36,10 @@ function main(): void {
           res.end(body);
         })
         .catch((err: unknown) => {
-          logger.error('Failed to render metrics', { error: String(err) });
+          logger.error('Failed to render metrics', {
+            port: config.metricsPort,
+            ...errorFields(err),
+          });
           res.writeHead(500);
           res.end();
         });

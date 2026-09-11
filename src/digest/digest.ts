@@ -1,6 +1,7 @@
 import { discover } from '../reconcile/discover.js';
 import { formatDigestComment } from './format.js';
 import { buildAttachmentMetadata, getLastDigestAt } from '../naming.js';
+import { errorFields } from '../errors.js';
 import { logger } from '../logger.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
@@ -48,13 +49,19 @@ export async function runDigestJob(deps: DigestDeps): Promise<void> {
         success = false;
         logger.error('Failed to run digest for mapping', {
           issue: mapping.issue.identifier,
-          error: err instanceof Error ? err.message : String(err),
+          issueId: mapping.issue.id,
+          issueUrl: mapping.issue.url,
+          todoistProject: mapping.matchedProject?.name,
+          todoistProjectId: mapping.matchedProject?.id,
+          ...errorFields(err),
         });
       }
     }
   } catch (err) {
     success = false;
-    logger.error('Digest job failed', { error: err instanceof Error ? err.message : String(err) });
+    // Thrown out of discovery, before any individual mapping was reached - so unlike the
+    // per-mapping error above, no single issue is to blame and none were digested.
+    logger.error('Digest job failed', errorFields(err));
   } finally {
     deps.metrics.lastDigestResult.set(success ? 1 : 0);
     if (success) {

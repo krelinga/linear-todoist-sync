@@ -9,6 +9,7 @@ import type {
 } from '../../src/clients/linear.js';
 import { createMetrics } from '../../src/metrics.js';
 import { logger } from '../../src/logger.js';
+import { errorFields } from '../../src/errors.js';
 
 vi.mock('../../src/logger.js', () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -18,7 +19,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function rawIssue(overrides: Partial<Omit<RawIssue, 'state' | 'attachments'>> & { stateType?: string }): RawIssue {
+function rawIssue(
+  overrides: Partial<Omit<RawIssue, 'state' | 'attachments'>> & { stateType?: string },
+): RawIssue {
   const { stateType, ...rest } = overrides;
   return {
     id: 'issue-1',
@@ -32,7 +35,11 @@ function rawIssue(overrides: Partial<Omit<RawIssue, 'state' | 'attachments'>> & 
   };
 }
 
-function connection(nodes: RawIssue[], hasNextPage = false, endCursor: string | null = null): RawConnection<RawIssue> {
+function connection(
+  nodes: RawIssue[],
+  hasNextPage = false,
+  endCursor: string | null = null,
+): RawConnection<RawIssue> {
   return { nodes, pageInfo: { hasNextPage, endCursor } };
 }
 
@@ -220,7 +227,10 @@ describe('LinearClient', () => {
         metadata: { syncApp: 'linear-todoist-sync' },
       });
       expect(createAttachment).toHaveBeenCalledWith(
-        expect.objectContaining({ issueId: 'issue-1', url: 'https://todoist.com/showProject?id=123' }),
+        expect.objectContaining({
+          issueId: 'issue-1',
+          url: 'https://todoist.com/showProject?id=123',
+        }),
       );
       expect(result.id).toBe('att-1');
       expect(logger.info).toHaveBeenCalledWith(
@@ -287,7 +297,10 @@ describe('LinearClient', () => {
       createComment: vi.fn(),
     };
     const client = new LinearClient(sdk);
-    await client.updateAttachment('att-1', { title: '[ENG-1] New title', subtitle: '3 tasks outstanding' });
+    await client.updateAttachment('att-1', {
+      title: '[ENG-1] New title',
+      subtitle: '3 tasks outstanding',
+    });
     expect(updateAttachment).toHaveBeenCalledWith('att-1', {
       title: '[ENG-1] New title',
       subtitle: '3 tasks outstanding',
@@ -295,7 +308,11 @@ describe('LinearClient', () => {
     });
     expect(logger.info).toHaveBeenCalledWith(
       'Updated Linear attachment',
-      expect.objectContaining({ system: 'linear', attachmentId: 'att-1', title: '[ENG-1] New title' }),
+      expect.objectContaining({
+        system: 'linear',
+        attachmentId: 'att-1',
+        title: '[ENG-1] New title',
+      }),
     );
   });
 
@@ -338,10 +355,7 @@ describe('LinearClient', () => {
     const metrics = createMetrics();
     const sdk: LinearSdkClient = {
       issues: vi.fn(),
-      issue: vi
-        .fn()
-        .mockResolvedValueOnce(rawIssue({}))
-        .mockRejectedValueOnce(httpError(400)),
+      issue: vi.fn().mockResolvedValueOnce(rawIssue({})).mockRejectedValueOnce(httpError(400)),
       createAttachment: vi.fn(),
       updateAttachment: vi.fn(),
       createComment: vi.fn(),
@@ -356,5 +370,78 @@ describe('LinearClient', () => {
         expect.objectContaining({ labels: { service: 'linear', result: 'error' }, value: 1 }),
       ]),
     );
+  });
+
+  describe('error context', () => {
+    it('names the operation and issue when a lookup fails', async () => {
+      const sdk: LinearSdkClient = {
+        issues: vi.fn(),
+        issue: vi
+          .fn()
+          .mockRejectedValue(
+            new Error('Entity not found: Issue - Could not find referenced Issue.'),
+          ),
+        createAttachment: vi.fn(),
+        updateAttachment: vi.fn(),
+        createComment: vi.fn(),
+      };
+      const client = new LinearClient(sdk);
+
+      // No HTTP status, so this is not classified as "gone" and escapes getIssueRaw.
+      const err = await client.getIssue('ENG-42').catch((e: unknown) => e);
+
+      expect((err as Error).message).toBe(
+        'Linear API request failed (system=linear, operation=issue, issueId=ENG-42): ' +
+          'Entity not found: Issue - Could not find referenced Issue.',
+      );
+      expect(errorFields(err)).toMatchObject({
+        system: 'linear',
+        operation: 'issue',
+        issueId: 'ENG-42',
+      });
+    });
+
+    it('carries the HTTP status as a field when the API supplies one', async () => {
+      const sdk: LinearSdkClient = {
+        issues: vi.fn(),
+        issue: vi.fn(),
+        createAttachment: vi.fn(),
+        updateAttachment: vi.fn(),
+        createComment: vi.fn().mockRejectedValue(httpError(403)),
+      };
+      const client = new LinearClient(sdk);
+
+      const err = await client.createComment('issue-1', 'hello').catch((e: unknown) => e);
+
+      expect(errorFields(err)).toMatchObject({
+        operation: 'commentCreate',
+        issueId: 'issue-1',
+        httpStatus: 403,
+      });
+    });
+
+    it('names the issue when the attachmentCreate mutation returns no attachment', async () => {
+      const sdk: LinearSdkClient = {
+        issues: vi.fn(),
+        issue: vi.fn(),
+        createAttachment: vi.fn().mockResolvedValue({ attachment: undefined }),
+        updateAttachment: vi.fn(),
+        createComment: vi.fn(),
+      };
+      const client = new LinearClient(sdk);
+
+      const err = await client
+        .createAttachment({
+          issueId: 'issue-1',
+          title: '[ENG-1] Fix the thing',
+          url: 'https://todoist.com/showProject?id=proj-1',
+          iconUrl: 'https://example.com/icon.png',
+          metadata: {},
+        })
+        .catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain('issueId=issue-1');
+      expect((err as Error).message).toContain('title=[ENG-1] Fix the thing');
+    });
   });
 });
