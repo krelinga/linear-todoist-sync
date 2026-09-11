@@ -3,7 +3,7 @@ import { LinearClient as LinearSdkClient } from '@linear/sdk';
 import { TodoistApi } from '@doist/todoist-sdk';
 import { loadConfig, ConfigError } from './config.js';
 import { errorFields } from './errors.js';
-import { logger } from './logger.js';
+import { describeLogTimezone, logger } from './logger.js';
 import { createMetrics } from './metrics.js';
 import { LinearClient } from './clients/linear.js';
 import { TodoistClient } from './clients/todoist.js';
@@ -12,6 +12,11 @@ import { createPollNudge, type PollNudge } from './webhook/nudge.js';
 import { createWebhookServer } from './webhook/server.js';
 
 function main(): void {
+  // Deliberately the first line of every boot, ahead of even config loading: it names the zone
+  // that every timestamp below it - including its own, and including a config-error line - is
+  // rendered in. See describeLogTimezone for why that is worth saying out loud.
+  logger.info('Logging in local timezone', describeLogTimezone());
+
   let config;
   try {
     config = loadConfig();

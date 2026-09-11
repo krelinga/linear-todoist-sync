@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatLocalTimestamp, logger } from '../src/logger.js';
+import { describeLogTimezone, formatLocalTimestamp, logger } from '../src/logger.js';
 
 const ORIGINAL_TZ = process.env.TZ;
 
@@ -15,6 +15,17 @@ function withTimeZone<T>(timeZone: string, fn: () => T): T {
     if (ORIGINAL_TZ === undefined) {
       delete process.env.TZ;
     } else {
+      process.env.TZ = ORIGINAL_TZ;
+    }
+  }
+}
+
+function withoutTimeZone<T>(fn: () => T): T {
+  delete process.env.TZ;
+  try {
+    return fn();
+  } finally {
+    if (ORIGINAL_TZ !== undefined) {
       process.env.TZ = ORIGINAL_TZ;
     }
   }
@@ -112,5 +123,31 @@ describe('logger', () => {
 
     expect(log).not.toHaveBeenCalled();
     expect(errorOut).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('describeLogTimezone', () => {
+  it('reports the zone, its offset, and that TZ was what selected it', () => {
+    const described = withTimeZone('America/Chicago', () => describeLogTimezone());
+    expect(described).toEqual({
+      timezone: 'America/Chicago',
+      utcOffset: expect.stringMatching(/^-0[56]:00$/),
+      tzSource: 'TZ',
+    });
+  });
+
+  it('reports tzSource "host" when TZ is unset, which is the case worth noticing', () => {
+    const described = withoutTimeZone(() => describeLogTimezone());
+    expect(described).toMatchObject({ tzSource: 'host' });
+  });
+
+  it('reports an offset that matches the timestamps it describes', () => {
+    // The two must never disagree: an operator reads this line to interpret every line after it.
+    const [described, stamped] = withTimeZone('Asia/Kathmandu', () => [
+      describeLogTimezone(),
+      formatLocalTimestamp(new Date()),
+    ]);
+    expect(described['utcOffset']).toBe('+05:45');
+    expect(stamped.endsWith('+05:45')).toBe(true);
   });
 });

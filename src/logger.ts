@@ -44,6 +44,26 @@ export function formatLocalTimestamp(date: Date): string {
   );
 }
 
+/**
+ * What every `timestamp` in this stream is rendered in, for one line at startup.
+ *
+ * It exists because the way this gets it wrong is silent. With `TZ` unset the zone comes from
+ * the host, and on this image a bind-mounted `/etc/localtime` leaves ICU with no database to
+ * match against, so it guesses — `America/Chicago` resolving as UTC-7. Nothing downstream looks
+ * broken; the timestamps are just wrong. A startup line reading `tzSource: "host"` beside an
+ * unexpected `timezone` is the only warning an operator gets, and it costs one line to give.
+ *
+ * The offset is taken from `formatLocalTimestamp` itself rather than computed separately, so it
+ * cannot disagree with the timestamps it is describing.
+ */
+export function describeLogTimezone(): Record<string, unknown> {
+  return {
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    utcOffset: formatLocalTimestamp(new Date()).slice(-6),
+    tzSource: process.env.TZ ? 'TZ' : 'host',
+  };
+}
+
 function write(level: LogLevel, message: string, fields?: LogFields): void {
   const line = JSON.stringify({
     timestamp: formatLocalTimestamp(new Date()),

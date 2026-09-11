@@ -66,6 +66,17 @@ has no `tzdata` to resolve it against and silently guesses the wrong zone
 (`America/Chicago` comes out as UTC-7). Setting `TZ` sidesteps all of this and
 needs nothing added to the image.
 
+The first line of every boot names the zone the rest of the stream is stamped
+in, so that guess is visible rather than silent:
+
+```json
+{"timestamp":"2026-09-11T09:25:47.957-05:00","level":"info","message":"Logging in local timezone","timezone":"America/Chicago","utcOffset":"-05:00","tzSource":"TZ"}
+```
+
+`tzSource` is `TZ` when you set it and `host` when you did not. A `host` line
+whose `timezone` and `utcOffset` disagree — `America/Chicago` at `-07:00` — is
+the misdetection above, and the fix is to set `TZ`.
+
 Note that this is display only. Everything the service *stores* or sends —
 the digest watermark, the Todoist completion window, the Prometheus timestamp
 gauges — stays UTC regardless of `TZ`.

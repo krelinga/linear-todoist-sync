@@ -314,6 +314,8 @@ No `volumes:` entry — there's nothing local that needs to survive a restart (�
 
 **`TZ` must be set explicitly; unset is not the same as UTC.** Unset means "the zone the host is configured for". That is UTC in the stock `node:24-alpine` image, so the deployed container is unaffected — but it is the developer's own zone under `npm start`, and it is a *silently wrong* zone if `/etc/localtime` is bind-mounted (the usual Docker idiom) without also installing `tzdata`: with no zone database to match the file against, ICU guesses, and guesses badly — `America/Chicago` resolves as UTC-7 and `America/New_York` as `America/Panama`. Setting `TZ` is what makes the rendering deterministic, which is why both compose files set it rather than relying on the image default.
 
+Because that misdetection is otherwise invisible — nothing errors, the timestamps are simply wrong — the service logs the resolved zone as the first line of every boot, ahead of config loading, carrying `timezone`, `utcOffset` and a `tzSource` of `TZ` or `host`. A `host` line whose zone and offset disagree is the failure above, stated plainly at the only moment anyone would think to look.
+
 It is deliberately **not** `DIGEST_TIMEZONE`. That setting decides *when the digest runs* and is business logic; this one decides how a timestamp is printed. A single-user deployment will set both to the same zone, but coupling them would mean rescheduling the digest silently reformatted the logs, and vice versa.
 
 Nothing the service stores or transmits follows `TZ`: the `lastDigestAt` watermark (§6.1), the Todoist completion window (§7), and the `*_timestamp_seconds` gauges (§8) all stay UTC. Those are data, not display.
