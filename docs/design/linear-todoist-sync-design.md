@@ -297,6 +297,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
+      TZ: "America/Chicago"
       LINEAR_API_KEY: ${LINEAR_API_KEY}
       TODOIST_API_TOKEN: ${TODOIST_API_TOKEN}
       POLL_INTERVAL_SECONDS: 60
@@ -308,6 +309,16 @@ services:
 ```
 
 No `volumes:` entry — there's nothing local that needs to survive a restart (§5.4, §6).
+
+`TZ` is the standard Node/Docker variable, not something this service parses, and it affects only how log timestamps are *rendered*: ISO 8601 in that zone with the UTC offset appended, e.g. `2026-09-11T08:42:13.123-05:00`. The motivation is correlation — reading a log line against an alert notification or a Grafana panel without doing the arithmetic first. The offset is always printed, which is what keeps a line unambiguous across a DST changeover (one local hour occurs twice) and keeps it parseable back to an absolute instant. Node's bundled ICU resolves a `TZ` name without Alpine's `tzdata` package, so the image needs no change.
+
+**`TZ` must be set explicitly; unset is not the same as UTC.** Unset means "the zone the host is configured for". That is UTC in the stock `node:24-alpine` image, so the deployed container is unaffected — but it is the developer's own zone under `npm start`, and it is a *silently wrong* zone if `/etc/localtime` is bind-mounted (the usual Docker idiom) without also installing `tzdata`: with no zone database to match the file against, ICU guesses, and guesses badly — `America/Chicago` resolves as UTC-7 and `America/New_York` as `America/Panama`. Setting `TZ` is what makes the rendering deterministic, which is why both compose files set it rather than relying on the image default.
+
+Because that misdetection is otherwise invisible — nothing errors, the timestamps are simply wrong — the service logs the resolved zone as the first line of every boot, ahead of config loading, carrying `timezone`, `utcOffset` and a `tzSource` of `TZ` or `host`. A `host` line whose zone and offset disagree is the failure above, stated plainly at the only moment anyone would think to look.
+
+It is deliberately **not** `DIGEST_TIMEZONE`. That setting decides *when the digest runs* and is business logic; this one decides how a timestamp is printed. A single-user deployment will set both to the same zone, but coupling them would mean rescheduling the digest silently reformatted the logs, and vice versa.
+
+Nothing the service stores or transmits follows `TZ`: the `lastDigestAt` watermark (§6.1), the Todoist completion window (§7), and the `*_timestamp_seconds` gauges (§8) all stay UTC. Those are data, not display.
 
 The metrics port is the one intentional exception to "no inbound exposure": Prometheus has to be able to reach it. Publishing it on the Docker network is fine as long as your Prometheus server lives on the same LAN — that's still entirely internal, not the internet-exposure trade-off from §4. If your Prometheus instance lives elsewhere on the tailnet instead, put this port behind **Tailscale Serve** (§4.2) rather than opening it more broadly — Serve is exactly the tailnet-only, no-public-exposure fit for "another one of my own machines needs to reach this," as opposed to Funnel, which is for the public internet reaching in. Everything else about the container's networking is unchanged: it makes outbound calls to `api.linear.app` and `api.todoist.com`, and nothing about it needs to be reachable from outside your LAN/tailnet.
 

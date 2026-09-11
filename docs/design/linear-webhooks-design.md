@@ -310,6 +310,7 @@ services:
       LINEAR_WEBHOOK_SECRET: ${LINEAR_WEBHOOK_SECRET}
       WEBHOOK_PORT: 9465
       WEBHOOK_PATH: /webhooks/linear
+      TZ: "America/Chicago"
       POLL_INTERVAL_SECONDS: 60
       DIGEST_TIME: "07:00"
       DIGEST_TIMEZONE: "America/Chicago"
