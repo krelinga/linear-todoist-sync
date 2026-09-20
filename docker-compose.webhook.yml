@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
     # Becomes <hostname>.<tailnet>.ts.net, which is baked into the webhook URL registered in
     # Linear. Pin it: if it changes, deliveries 404 and nothing else looks wrong.
-    hostname: linear-sync
+    hostname: linear-todoist-sync
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY}
       TS_EXTRA_ARGS: --advertise-tags=tag:webhook-ingress
@@ -26,7 +26,7 @@ services:
       TS_SERVE_CONFIG: /config/serve.json
     volumes:
       # Without persistent state the node re-authenticates on every restart and can come back
-      # as linear-sync-1, linear-sync-2, ... - silently changing the hostname above.
+      # as linear-todoist-sync-1, linear-todoist-sync-2, ... - silently changing the hostname above.
       - tailscale-state:/var/lib/tailscale
       - ./tailscale/serve.json:/config/serve.json:ro
     ports:
@@ -40,6 +40,12 @@ services:
     # Shares the sidecar's network namespace, so tailscaled reaches the receiver at
     # 127.0.0.1:9465 and nothing binds a host port. This is also why a reverse proxy already
     # holding :443 on the host is not a conflict (§6.3).
+    #
+    # Not interchangeable with a `networks:` entry: Serve/Funnel proxies only to
+    # `http://127.0.0.1` on its own node, so moving the receiver onto a network of its own
+    # leaves Funnel with no route to it while every container still looks healthy. If this
+    # pair ever does need to join another network, declare it on the sidecar - it owns the
+    # namespace, so both containers inherit it (§6.3).
     network_mode: service:tailscale
     depends_on:
       - tailscale

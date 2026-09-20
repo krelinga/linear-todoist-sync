@@ -77,6 +77,15 @@ export function createWebhookServer(deps: WebhookServerDeps): Server {
   return createServer((req, res) => {
     const pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
     if (req.method !== 'POST' || pathname !== deps.config.path) {
+      // Logged because this 404 is otherwise indistinguishable, from the outside, from
+      // tailscaled never having reached the receiver at all - and the two have completely
+      // different fixes. Path matching is exact, so a trailing slash lands here too.
+      logger.debug('Webhook receiver returned 404', {
+        system: 'webhook',
+        method: req.method,
+        receivedPath: pathname,
+        expectedPath: deps.config.path,
+      });
       res.writeHead(404);
       res.end();
       return;

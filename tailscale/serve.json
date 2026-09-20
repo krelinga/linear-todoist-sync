@@ -5,7 +5,7 @@
   "Web": {
     "${TS_CERT_DOMAIN}:443": {
       "Handlers": {
-        "/webhooks/linear": { "Proxy": "http://127.0.0.1:9465" }
+        "/webhooks/linear": { "Proxy": "http://127.0.0.1:9465/webhooks/linear" }
       }
     }
   },

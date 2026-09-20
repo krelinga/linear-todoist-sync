@@ -215,7 +215,7 @@ That config publishes your metrics to the internet, and nothing about it looks w
 
 Two rules follow:
 
-1. **The Funnel'd host:port carries exactly one handler** — the webhook path. Requests to any other path under it get a 404 from `tailscaled`, since no handler matches.
+1. **The Funnel'd host:port carries exactly one handler** — the webhook path. Requests to any other path under it get a 404 from `tailscaled`, since no handler matches. (§6.5 covers the one subtlety: the path must also appear on the proxy target, or Serve's prefix-stripping delivers `/` to the receiver.)
 2. **Anything else this node serves goes on a port Funnel cannot use at all.** Funnel is restricted to `443`, `8443`, and `10000`, so a handler on e.g. `:9443` cannot be exposed by any `AllowFunnel` typo — Tailscale will refuse to Funnel that port. `:8443` is a poor choice for the same reason `:443` is: it is Funnel-capable, and therefore one stray `true` away from public.
 
 In this deployment rule 2 has nothing to apply to, because Prometheus scrapes `/metrics` over the LAN and the metrics port is never given a Serve handler (§6.5). That is the strongest version of this: the config `tailscaled` holds contains exactly one handler, and it is the one meant to be public. Rule 2 exists for the day that changes.
@@ -287,7 +287,7 @@ services:
   tailscale:
     image: tailscale/tailscale:latest
     restart: unless-stopped
-    hostname: linear-sync                 # becomes <this>.<tailnet>.ts.net — see §6.4
+    hostname: linear-todoist-sync                 # becomes <this>.<tailnet>.ts.net — see §6.4
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY}
       TS_EXTRA_ARGS: --advertise-tags=tag:webhook-ingress
@@ -328,13 +328,17 @@ This is precisely where §6.2's option 2 stops being attractive. If `tailscaled`
 
 Confirm after deploying, on the host: `ss -tlnp | grep -E ':(443|9465)'` should show Caddy on `443` and no listener for `9465` — the latter exists only inside the container namespace.
 
+**No Docker network is declared, and none is needed.** Every path that carries traffic here is covered without one: Funnel ingress arrives over the connection `tailscaled` holds *outbound*, `tailscaled` reaches the receiver on loopback, both APIs are on the public internet, and Prometheus scrapes the published host port over the LAN. Compose's implicit project network is therefore doing nothing but existing.
+
+If a future co-tenant does need to reach this pair by name, **attach the sidecar, never the sync service.** `network_mode: service:tailscale` is not interchangeable with a `networks:` entry, for the same §6.2 reason that produced the sidecar at all: Serve/Funnel proxies only to `http://127.0.0.1` on its own node, so giving the sync container its own network identity leaves `tailscaled` with no route to it — the receiver goes unreachable through Funnel while every container still looks healthy. The sidecar owns the namespace, so both containers land on every network listed on it, exactly as with `ports:`. One consequence is worth stating because it reads as a bug the first time: from that network the sync service answers on the *sidecar's* name (`http://tailscale:9464`), never `http://linear-todoist-sync:9464`, since the app container has no network identity of its own to resolve.
+
 **No `NET_ADMIN` or `/dev/net/tun` needed.** The sidecar runs in Tailscale's userspace networking mode (the container image's default), which is sufficient here because the only traffic it handles is Funnel proxying to `127.0.0.1` in its own namespace — it is not routing for anyone. This is a further contrast with the subnet router of §6.2, which does need kernel networking precisely because it *is* routing.
 
 ### 6.4 Node identity: three settings that fail silently if wrong, and one that limits the damage
 
 The Linear webhook URL contains the node's name, and the URL is registered once in Linear's settings. Anything that changes the name, or lets the node fall out of the tailnet, breaks delivery — and breaks it in the quiet way §8.1 is about.
 
-- **Persistent state volume.** `TS_STATE_DIR` on a named volume. Without it, the container re-authenticates on every restart and can come back as `linear-sync-1`, `linear-sync-2`, … — silently changing the hostname the webhook URL depends on. This is why base §9's "no `volumes:`" property cannot survive this design (§2.2). Ephemeral auth keys are the wrong choice here for the same reason.
+- **Persistent state volume.** `TS_STATE_DIR` on a named volume. Without it, the container re-authenticates on every restart and can come back as `linear-todoist-sync-1`, `linear-todoist-sync-2`, … — silently changing the hostname the webhook URL depends on. This is why base §9's "no `volumes:`" property cannot survive this design (§2.2). Ephemeral auth keys are the wrong choice here for the same reason.
 - **A tag, not a user identity.** `--advertise-tags=tag:webhook-ingress`, with a matching policy entry:
 
   ```json
@@ -346,15 +350,13 @@ The Linear webhook URL contains the node's name, and the URL is registered once 
   Tagging is not just tidiness: **tagged nodes do not have key expiry, while user-owned nodes expire (180 days by default)**. An untagged node here works perfectly for six months and then drops off the tailnet, taking the Funnel with it. That is a genuinely nasty failure to debug months after deploying, and §8.2's probe is what would surface it — within one scrape interval rather than whenever you next noticed sync feeling slow.
 - **A pinned `hostname:`.** So the name is a declared property of the deployment rather than an accident of container naming.
 
-**Constrain the node with ACLs.** The tag earns its keep a second time here. This node is the one thing in the tailnet exposed to the internet, so it should be the least privileged member of it — it needs to talk to `api.linear.app` and `api.todoist.com` and nothing else on the tailnet. Deny it outbound tailnet access in the policy file:
+**Constrain the node with ACLs.** The tag earns its keep a second time here. This node is the one thing in the tailnet exposed to the internet, so it should be the least privileged member of it — it needs to talk to `api.linear.app` and `api.todoist.com` and nothing else on the tailnet.
 
-```json
-"acls": [
-  { "action": "accept", "src": ["tag:webhook-ingress"], "dst": [] }
-]
-```
+**This work is subtractive, and there is no rule to add.** Tailscale has no deny rule and is deny-by-default, so "this tag gets nothing" is expressed by *no rule matching the tag* — not by a rule granting it nothing. An entry like `{ "action": "accept", "src": ["tag:webhook-ingress"], "dst": [] }` is not merely a no-op, it fails validation: an empty `dst` is rejected, and because `acls` still accepts the legacy `users`/`ports` field names, the validator falls back to legacy parsing and reports the confusing `users must be specified`.
 
-Tailscale denies by default, so the practical work is *not* writing a permissive rule that happens to include `tag:webhook-ingress` — check that no existing broad rule (`autogroup:member` → `*`, or a catch-all `src: ["*"]`) already grants it more than it needs, since a tagged node picks up any rule whose source matches.
+The actual task is to audit what already matches. A tagged node picks up every rule whose source matches it, and **the default policy a new tailnet ships with grants everything to everyone** — `{"src": ["*"], "dst": ["*"], "ip": ["*"]}` in the newer `grants` syntax, or a catch-all `src: ["*"]` under `acls` on older tailnets. Either one silently hands this node the whole tailnet. So check for, and narrow, any rule whose source is `*`, `autogroup:member`, or a group containing your own user.
+
+That narrowing is a tailnet-wide change rather than a property of this deployment, which is why it is worth doing deliberately and separately: **the rollout works without it, just with a less isolated node.** Nothing else in this design depends on it.
 
 This is the cheap version of the isolation a dedicated VM would provide. A separate VM would additionally stop the receiver from sharing a kernel with the host's other containers — a real boundary, but a heavy one for a service whose worst-case compromise is a container that can reach two public APIs. A few lines of policy get most of the benefit for none of the ongoing maintenance (§13).
 
@@ -369,7 +371,7 @@ Prometheus scrapes `/metrics` over the LAN via the published port in §6.3, so m
   },
   "Web": {
     "${TS_CERT_DOMAIN}:443": { "Handlers": {
-      "/webhooks/linear": { "Proxy": "http://127.0.0.1:9465" }
+      "/webhooks/linear": { "Proxy": "http://127.0.0.1:9465/webhooks/linear" }
     } }
   },
   "AllowFunnel": {
@@ -378,7 +380,21 @@ Prometheus scrapes `/metrics` over the LAN via the published port in §6.3, so m
 }
 ```
 
-This is the strongest form of §5.4: there is only one handler, on one port, and it is the one that is supposed to be public. Nothing else is reachable through `tailscaled` at all, so `AllowFunnel`'s port-level granularity has nothing to over-expose. Requests to any other path under `:443` get a 404 from `tailscaled`.
+**The path appears twice on purpose — once as the mount point, once on the proxy target — and dropping either one breaks delivery.** Tailscale Serve strips the mount point before proxying (`ipn/ipnlocal/serve.go`: `http.StripPrefix(strings.TrimSuffix(mountPoint, "/"), h)`, `tailscale/tailscale#6571`). With a bare `"Proxy": "http://127.0.0.1:9465"`, a delivery to `/webhooks/linear` therefore reaches the receiver as `/`, fails its exact-match check, and returns **404 to Linear** — while a direct `curl` to `127.0.0.1:9465/webhooks/linear` on the node still answers `401`, so the receiver looks perfectly healthy and the fault appears to be in the ingress. This is a genuinely expensive hour to lose.
+
+Putting the path on the proxy target restores it. `proxyHandlerForBackend`'s rewrite carries a branch for exactly this case:
+
+```go
+oldOutPath := r.Out.URL.Path
+r.SetURL(rp.url)
+if oldOutPath == "" && rp.url.Path != "" {
+    r.Out.URL.Path = rp.url.Path
+}
+```
+
+When the mount point consumed the whole request path, `oldOutPath` is empty and the backend's own path is used verbatim — no duplication and no trailing slash. A deeper request such as `/webhooks/linear/extra` takes the other branch, arrives as `/webhooks/linear/extra`, and is rejected by the receiver, which is correct.
+
+The alternative — mounting at `/` — also works, but it costs more than it looks: `tailscaled` would forward every path on the host to the receiver, and `/` would be occupied on the one host:port that is published to the internet. Keeping the mount explicit preserves §5.4 rule 1 exactly as written and leaves `/` unclaimed.
 
 **If you later add a Serve handler for metrics** — because Prometheus moved onto the tailnet, or the LAN port went away — do not add it under `${TS_CERT_DOMAIN}:443`. It would inherit that key's `AllowFunnel: true` and be published to the internet, with nothing about the config looking wrong. Put it on a port Funnel structurally cannot serve (Funnel is limited to `443`, `8443`, `10000`, so `:9443` works and `:8443` is a poor choice), and §5.4's reasoning is preserved.
 
@@ -427,7 +443,12 @@ blackbox:
   dns: ["1.1.1.1"]                 # load-bearing — see below
   command: --config.file=/config/blackbox.yml
   volumes: ["./blackbox.yml:/config/blackbox.yml:ro"]
+  ports: ["9115:9115"]             # only needed if Prometheus is on another host
 ```
+
+The `ports:` entry and the `__address__` relabel below are a pair: `blackbox:9115` resolves only where Prometheus shares a Docker network with the exporter, so a Prometheus on a different machine must be given the exporter's host and a published port to reach. Getting this wrong shows up as `up == 0` rather than a failed probe — the scrape never happens, so there is no `probe_success` to be false.
+
+Publishing `9115` is an SSRF surface worth understanding rather than worrying about: `/probe?target=…` fetches whatever URL names it, so anyone who can reach the port can make the exporter issue requests on their behalf. Three things bound it — the exporter returns metrics and never response bodies, `module` can only select what `blackbox.yml` already defines (with `linear_webhook` alone that is "POST somewhere and learn a status code"), and the caller must already be inside the network, where they could port-scan directly. On an internal network that is a reasonable trade; the categorical rule is only that it must never be internet-reachable and must never be given a Funnel handler (§5.4). Adding general-purpose modules such as `http_2xx` widens this materially and is the point to revisit it.
 
 ```yaml
 # blackbox.yml
@@ -439,6 +460,7 @@ modules:
       method: POST
       valid_status_codes: [401]
       fail_if_not_ssl: true
+      preferred_ip_protocol: ip4     # load-bearing — see below
 ```
 
 ```yaml
@@ -448,12 +470,27 @@ modules:
   metrics_path: /probe
   params: { module: [linear_webhook] }
   static_configs:
-    - targets: ["https://linear-sync.<tailnet>.ts.net/webhooks/linear"]
+    - targets: ["https://linear-todoist-sync.<tailnet>.ts.net/webhooks/linear"]
   relabel_configs:
     - { source_labels: [__address__], target_label: __param_target }
     - { source_labels: [__param_target], target_label: instance }
-    - { target_label: __address__, replacement: "blackbox:9115" }
+    # The EXPORTER's address, not the probed URL. A bare "blackbox:9115" resolves
+    # only when Prometheus shares a Docker network with it; give it host:port otherwise.
+    - { target_label: __address__, replacement: "<prober host>:9115" }
 ```
+
+#### Why `preferred_ip_protocol: ip4` is load-bearing
+
+Tailscale publishes AAAA records for Funnel hostnames, and `blackbox_exporter` defaults to `preferred_ip_protocol: ip6`. A Docker container has no IPv6 route unless one was deliberately configured. The name therefore resolves to a AAAA, the dial fails, and **`ip_protocol_fallback` does not rescue it** — that option covers *resolution* failing, not a dial failing after a lookup succeeded. The result is a probe that never reaches the endpoint at all:
+
+```
+err="Post \"https://[2606:4700:10::6814:179a]/webhooks/linear\":
+     dial tcp [2606:4700:10::6814:179a]:443: connect: network is unreachable"
+```
+
+`probe_http_status_code` reads `0` and `probe_ip_protocol` reads `6`, which together identify this precisely. Pinning ip4 is the fix; enabling IPv6 on the prober's network is the alternative, and is more work for no benefit here.
+
+This deserves the same emphasis as the `dns:` line below, for the same reason: both are ways the probe fails to test what it claims to test. The difference is that this one fails loudly — the probe is red — whereas the `dns:` one fails green, which is worse.
 
 #### Why `dns:` is the load-bearing line
 
@@ -466,8 +503,10 @@ Note the asymmetry with §6.2: a machine merely *reachable through* the subnet r
 To confirm at setup time, from inside the prober container:
 
 ```
-dig +short linear-sync.<tailnet>.ts.net     # public IP = good; 100.x = bypassing Funnel
+ping -c1 -W1 linear-todoist-sync.<tailnet>.ts.net   # line 1 prints the resolved address
 ```
+
+The `prom/blackbox-exporter` image carries no `dig`; `ping` and `nslookup` are busybox applets that ship with it, and `ping` prints the address it resolved on its first line whether or not ICMP is answered. **A public IP is correct. A `100.x` address means MagicDNS answered and the probe is bypassing Funnel** — that range is Tailscale's CGNAT block, and the IPv6 equivalent to watch for is `fd7a:115c:a1e0::/48`. Run it inside the container: the whole point is to exercise the resolver `dns:` pinned, and the host's resolver is a different path.
 
 #### What this does and does not cover
 
@@ -505,7 +544,31 @@ The `trigger` label on `sync_poll_runs_total` is a breaking change for any exist
 Replacing base §8.2's single rule:
 
 - **Sync is stuck** (carried over, **retuned**): `time() - sync_last_poll_success_timestamp_seconds > <3 × poll interval>`. At `POLL_INTERVAL_SECONDS=300` this becomes `> 900`, not the base doc's `300`. **Leaving the old threshold in place while raising the interval will page on every healthy cycle** — this is the easiest mistake to make in this whole design, because the alert lives in Prometheus and the interval lives in the container, and nothing links them.
-- **Webhook ingress is unreachable** (new): `probe_success{job="linear-webhook-probe"} == 0` for 15m. Not urgent — sync is still correct, just slower — so warning severity, not a page. At a 5-minute scrape interval, `for: 15m` means three consecutive failures, which rides out a single transient blip.
+- **Webhook ingress is unreachable** (new): no successful probe within the last hour. Not urgent — sync is still correct, just slower — so warning severity, not a page.
+
+  ```promql
+  max(max_over_time(probe_success{job="<probe job>"}[1h])) or vector(0)
+  ```
+
+  Alert when this is **below 1**. The expression always yields exactly one number — `1` if any probe succeeded in the window, `0` if they all failed, and `0` if the series is absent entirely — which is what Grafana's rule builder wants and what makes the absence case fire instead of evaporating.
+
+  Every part of that line is doing work:
+
+  - **`max_over_time(…[1h])`** replaces a `for:` clause. One window instead of a threshold plus a duration, and transient blips are ridden out by construction.
+  - **`or vector(0)`** is what turns "the series vanished" into an alert rather than silence. A bare `probe_success == 0` only fires when a probe ran and failed; if the job is renamed, the exporter disappears, or `prometheus.yml` is edited without a reload, there is no series to compare and no alert. That state is not hypothetical — it is where a misconfigured `__address__` leaves you.
+  - **`max(…)`** is load-bearing, not tidiness. `or` keeps everything on the left plus anything on the right whose labels do not match, and `vector(0)` carries an *empty* label set that never matches `{job=…,instance=…}`. Without the aggregation the expression returns **two** series — the real one and a spurious `0` — and any reduce step downstream is then choosing between them. `max()` collapses to a single empty-labelled series, which does match `vector(0)`, so the fallback is suppressed whenever real data exists.
+
+  The cost of collapsing labels is that the alert cannot say *which* target failed. With one probed URL that is free; probing several from one job means `max by (instance) (…)` and bringing back `absent_over_time`, since there is no per-instance fallback to synthesise.
+
+- **The prober itself is unreachable** (new): distinguishes "cannot scrape the exporter" from "the probe failed", which is the distinction that makes the difference between debugging the network and debugging the ingress.
+
+  ```promql
+  max(max_over_time(up{job="<probe job>"}[20m])) or vector(0)
+  ```
+
+  Also alert below 1. `up` is synthesised for every *configured* target, so it reports `0` on a failed scrape rather than disappearing — it only vanishes when the target stops being configured at all, which is exactly what a renamed job looks like, and is why `or vector(0)` belongs here too. Keep the window a small multiple of the scrape interval plus a spare interval of slack; at a 5-minute interval, `[20m]` holds four samples where `[15m]` holds "about three."
+
+  `avg_over_time` in place of `max_over_time` turns the same expression into a success *ratio*, which makes a better dashboard panel and a worse pager: `0.67` means one scrape in three failed. Graph the ratio, alert on the max.
 
 That is the whole alerting story: one rule for "reconciliation stopped" and one for "the fast path stopped." Everything else in §8.3 is diagnostic detail you'd consult *after* one of them fires.
 
@@ -516,7 +579,7 @@ That is the whole alerting story: one rule for "reconciliation stopped" and one 
 3. Is the node still in the tailnet admin console, or did its key expire (§6.4)?
 4. Did the node's hostname change, so the registered URL no longer resolves (§6.4)?
 5. Is the webhook still `enabled` in Linear's settings — the one case §8.2 deliberately doesn't cover?
-6. `dig +short` from the prober — did something reroute `*.ts.net` to the tailnet resolver (§8.2)? A *green* probe with slow sync points here too.
+6. Resolve the hostname from inside the prober — did something reroute `*.ts.net` to the tailnet resolver (§8.2)? A *green* probe with slow sync points here too.
 
 `sync_webhook_deliveries_total{result="rejected_signature"}` climbing means a secret mismatch — deliveries failing, sync degraded to polling — or someone probing the endpoint, which per §5.1 is expected since the hostname is public. It should not include §8.2's own probe (§8.3). Worth a glance, not an alert.
 
@@ -539,7 +602,7 @@ Because the webhook is purely a nudge and adds no durable sync state, both direc
 1. **Enable the tailnet prerequisites** (§6.1): HTTPS certs, MagicDNS, the `funnel` node attribute for `tag:webhook-ingress`, and the ACL constraining that tag (§6.4) — including a check that no pre-existing broad rule already grants it more than it needs. These are tailnet-wide settings and are the most likely thing to be missing on first attempt.
 2. **Deploy the sidecar topology with the receiver, keeping `POLL_INTERVAL_SECONDS=60`.** Nothing observable changes; polling still does all the work. Confirm with `tailscale funnel status` that exactly one path is public; with `ss -tlnp` on the host that nothing new bound a host port alongside Caddy (§6.3); and that Prometheus is still scraping after the `ports:` move (§6.3).
 3. **Register the webhook in Linear's UI** using the `.ts.net` URL (§4). Watch `sync_webhook_deliveries_total{result="accepted"}` climb as issues change.
-4. **Stand up the probe** (§8.2), and confirm `dig +short` *from inside the prober container* returns a public IP rather than a `100.x` address — a green probe proves nothing until you've checked this once.
+4. **Stand up the probe** (§8.2), and confirm that resolving the hostname *from inside the prober container* returns a public IP rather than a `100.x` address — a green probe proves nothing until you've checked this once.
 5. **Confirm the nudge path end to end** — move an issue into "In Progress" and check that the Todoist project appears in seconds rather than up to a minute, with `sync_poll_runs_total{trigger="webhook"}` incrementing.
 6. **Raise `POLL_INTERVAL_SECONDS` to 300 and retune the staleness alert in the same change** (§8.4).
 

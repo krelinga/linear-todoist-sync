@@ -10,6 +10,8 @@ The service is **implemented and released** (v1.1.0): TypeScript source in `src/
 
 `docs/design/linear-webhooks-design.md` describes the optional push-based Linear→Todoist path. The **service side is implemented** (`src/webhook/`, wired in `src/index.ts`, deployed via `docker-compose.webhook.yml`); it is off unless `LINEAR_WEBHOOK_SECRET` is set, in which case the service behaves exactly as it did before.
 
+**The Funnel ingress has now been deployed end to end**, and doing so surfaced several defects in the doc that had never been caught because the path had only ever been specified, never executed. All are fixed, and each is written up where the relevant config lives rather than as a changelog: Serve strips the mount point so the path must also appear on the proxy target (webhook §6.5); Tailscale has no deny rule, so constraining the node is subtractive and an empty `dst` fails validation (§6.4); Funnel hostnames carry AAAA records that a container cannot route, so the probe needs `preferred_ip_protocol: ip4` (§8.2); and the probe alert needs `or vector(0)` or it evaporates instead of firing when the series disappears (§8.4). Treat those four as the load-bearing details of this deployment.
+
 Two parts of that doc are deliberately **not** code and never will be, so don't go looking for them in `src/`:
 
 - **Ingress** — the Tailscale sidecar, `tailscale/serve.json`, and the tailnet prerequisites (webhook §6). Deployment config.
