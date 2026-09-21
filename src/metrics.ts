@@ -39,9 +39,18 @@ export function createMetrics(registry: Registry = new Registry()) {
 
   const lastPollResult = new Gauge({
     name: 'sync_last_poll_result',
-    help: '1 if the last poll succeeded, 0 if it failed.',
+    help: '1 if the last poll succeeded, 0 if it failed. Absent until one has run.',
     registers: [registry],
   });
+  // Same reasoning as the timestamps, and the lie is more direct here: 0 is defined as
+  // "failed", so the default asserts a failure that never happened and fires an alert written
+  // as `== 0` on every boot.
+  //
+  // Note what this gauge deliberately cannot answer even once populated: a job whose scheduler
+  // never fires again holds its last success forever. That question belongs to the staleness of
+  // the timestamp gauge above, and the two together cover both halves - did the most recent
+  // attempt fail, and how long since one succeeded.
+  unsetUntilFirstWrite(lastPollResult);
 
   const lastDigestRunTimestampSeconds = new Gauge({
     name: 'sync_last_digest_run_timestamp_seconds',
@@ -52,9 +61,10 @@ export function createMetrics(registry: Registry = new Registry()) {
 
   const lastDigestResult = new Gauge({
     name: 'sync_last_digest_result',
-    help: '1 if the last digest run succeeded, 0 if it failed.',
+    help: '1 if the last digest run succeeded, 0 if it failed. Absent until one has run.',
     registers: [registry],
   });
+  unsetUntilFirstWrite(lastDigestResult);
 
   const pollRunsTotal = new Counter({
     name: 'sync_poll_runs_total',

@@ -49,3 +49,28 @@ describe('timestamp gauges before their first event', () => {
     ).toBe('sync_last_digest_run_timestamp_seconds 1800000000');
   });
 });
+
+/**
+ * Same defect, more direct: 0 is a meaningful value here, so the default asserts a failure
+ * that never happened.
+ */
+describe('result gauges before their first run', () => {
+  it.each([
+    ['sync_last_digest_result', 'lastDigestResult'],
+    ['sync_last_poll_result', 'lastPollResult'],
+  ] as const)('%s reports no sample rather than "failed"', async (name, key) => {
+    const metrics = createMetrics();
+
+    expect(await samples(metrics[key])).toHaveLength(0);
+    expect(lineFor(await metrics.registry.metrics(), name)).toBeUndefined();
+  });
+
+  it('reports a real failure once one happens', async () => {
+    const metrics = createMetrics();
+    metrics.lastDigestResult.set(0);
+
+    expect(lineFor(await metrics.registry.metrics(), 'sync_last_digest_result')).toBe(
+      'sync_last_digest_result 0',
+    );
+  });
+});
