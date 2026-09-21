@@ -173,6 +173,24 @@ Where no project matches — the issue's project was deleted outright — nothin
 
 **Deleting a card is not the same kind of act as deleting a Todoist project** (§5.1), and the distinction is worth stating because the invariant there is absolute. A card holds nothing that does not exist elsewhere: it is regenerated from Linear and Todoist state on any cycle, and §5.4's self-heal recreates one from scratch if the wrong one is ever removed. Nothing about the duplicate's Todoist project changes here either — its own issue is no longer `started`, so the orphan path archives it on its own terms, tasks intact.
 
+### 5.6 Closing out a mapping
+
+Archiving a project ends a mapping, and two things were previously lost at that moment. Neither is specific to duplicates — both happen every time an issue leaves `started`.
+
+**The last day of completed work was never reported.** The digest (§7) walks *started* issues, so anything completed between the last daily run and the issue moving to Done was reported nowhere. That is precisely the day worth having: the work that finished the issue.
+
+**Outstanding tasks vanish from view.** They are archived along with the project (§5.1 — never deleted), but an archived Todoist project is not somewhere anyone looks. This is sharpest for a duplicate, where the work is expected to continue on the canonical issue and it is easy to strand unfinished tasks behind.
+
+So archiving now gathers state, archives, and posts a single **closing comment** carrying both halves: what was completed since the last digest, and what is still outstanding and now archived. It also links the project. When the issue was absorbed as a duplicate, the same record is posted to *both* issues, phrased from each side — the duplicate is told where work continues, and the canonical issue is told what it absorbed and, explicitly, that **the tasks did not come with it**. Linear moves the duplicate's card onto the canonical issue without a word about the Todoist project behind it, so that side would otherwise have no way to learn those tasks exist.
+
+**Tasks are not migrated to the canonical project**, and that is a deliberate limit rather than an omission. Moving them would be irreversible in a way nothing else here is: remove the duplicate relation later and the issue returns to `started`, its project unarchives — empty — and nothing records that the tasks belong to it. It is also a class of write this service otherwise avoids entirely (it creates, renames, archives and unarchives), and Todoist sections do not exist across projects, so a move would silently flatten the structure the digest groups by. The closing comment names the work instead and leaves the decision to a human.
+
+**Ordering is gather, archive, then comment.** The archive is the state change that makes the action a no-op on the next cycle, so committing it first means a failed comment costs the record rather than producing a fresh copy on every retry — the same trade `recreate_project` already makes.
+
+**The watermark** for "since last update" comes from the card on the linked issue; when Linear has moved that card onto whichever issue absorbed this one, it comes from the copy discovery captured before the same cycle deleted it as a stray (§5.5). The card does not need to still exist — only its metadata does — so the deletion and the archive need no ordering between them. With neither available it falls back to the same window a first digest uses (§7).
+
+**A recurring task completed inside the window appears under both headings.** Completing a recurring task reschedules it rather than closing it (§7), so it genuinely is both — and a recurrence still open at the moment its project is archived means nobody ended it first. Collapsing the two would hide exactly the thing worth noticing.
+
 ## 6. State schema
 
 No local database — everything durable lives in the Linear attachment and the Todoist project description created for each mapping (§5.4). This section is the schema reference for both, plus the one bit of state that's allowed to be ephemeral.
@@ -227,6 +245,8 @@ Two properties of that endpoint are load-bearing and neither is documented:
 
 Retention is the one real regression against the old endpoint, which reached back three months: after an outage longer than the plan's window, completions that fell out of it are gone. The daily cadence makes the normal window about a day wide, so this only bites a service that has been down for a week or more, and it is the price of recording recurring completions at all.
 
+This job only ever sees issues that are still `started`, so the completions between its last run and an issue leaving that state belong to §5.6's closing comment rather than to any digest.
+
 Because the watermark is read from Linear rather than a local table, a missed run (container down overnight) just picks up a bigger batch the next time it reads a stale `lastDigestAt` — nothing is silently dropped within the retention window, and there's no separate recovery behavior to reason about.
 
 A mapping with no watermark yet falls back to **7 days**. That bound used to be 89, sized to clear the old endpoint's 3-month span limit; with that endpoint gone the API no longer constrains it, so it is chosen for what makes a good first digest. Three months of history in a Linear comment is a wall of text about work whose context is long gone; a week is recognisable, and it happens to match the free plan's retention so the common case never exercises the 403 path.
@@ -275,7 +295,7 @@ The two gauge kinds are a pair and should not be collapsed: the result gauge ans
 |---|---|---|
 | `sync_poll_runs_total{result}` | counter | `result="success"` \| `"error"`, one per poll cycle |
 | `sync_poll_duration_seconds` | histogram | Time taken per poll cycle |
-| `sync_reconcile_actions_total{action}` | counter | `action="project_created"` \| `"project_renamed"` \| `"project_archived"` \| `"project_unarchived"` \| `"project_recreated"` \| `"card_reattached"` \| `"project_marked_lost"` \| `"comment_posted"` \| `"card_updated"` \| `"stray_card_deleted"` |
+| `sync_reconcile_actions_total{action}` | counter | `action="project_created"` \| `"project_renamed"` \| `"project_archived"` \| `"project_unarchived"` \| `"project_recreated"` \| `"card_reattached"` \| `"project_marked_lost"` \| `"comment_posted"` \| `"card_updated"` \| `"stray_card_deleted"` \| `"closing_comment_posted"` |
 | `sync_digest_comments_posted_total` | counter | Digest comments actually posted (excludes runs skipped for having nothing to report) |
 
 **Upstream API health:**
