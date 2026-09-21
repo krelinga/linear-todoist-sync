@@ -161,6 +161,18 @@ Two persistent links keep the systems cross-referenceable — and, since there's
 
   When a project archives (its issue leaves "in progress"), the card is left in place rather than deleted — its subtitle gets one last update, something like "Archived — 3 tasks were outstanding," matching the "leave things as-is" philosophy already used for the tasks themselves (§2.3). That keeps the issue's history intact instead of erasing the card.
 
+### 5.5 An issue marked as a duplicate of another
+
+Linear does not simply restate the duplicate: **creating the duplicate relation moves the duplicate's attachments onto the canonical issue.** Mark B a duplicate of A and A ends up holding B's card as well as its own, with B holding none — and the moved card sorts *ahead* of A's own in the order Linear returns them.
+
+That ordering is what made this more than cosmetic. Selecting the issue's card with "the first one carrying our marker" adopted B's, and from then on the service maintained the wrong card: retitling it after A on every cycle while A's real card went untouched, which reads as a card with the right name and the wrong link. The digest watermark rides in that metadata (§6.1), so the abandoned card took `lastDigestAt` with it and the adopted one had none — every completion already reported would have been reported again.
+
+**The Todoist project is what distinguishes them.** An issue's own card is the one pointing at the project that issue is currently matched to; anything else on the issue arrived from somewhere and is removed. Preferring by URL rather than by position is also what preserves the watermark.
+
+Where no project matches — the issue's project was deleted outright — nothing distinguishes the cards, so the first is kept and the rest removed. That state does not persist: the same cycle plans a recreate, and the next one matches the fresh card by URL. The rule incidentally cleans up after `recreate_project`, which has always left its superseded card in place.
+
+**Deleting a card is not the same kind of act as deleting a Todoist project** (§5.1), and the distinction is worth stating because the invariant there is absolute. A card holds nothing that does not exist elsewhere: it is regenerated from Linear and Todoist state on any cycle, and §5.4's self-heal recreates one from scratch if the wrong one is ever removed. Nothing about the duplicate's Todoist project changes here either — its own issue is no longer `started`, so the orphan path archives it on its own terms, tasks intact.
+
 ## 6. State schema
 
 No local database — everything durable lives in the Linear attachment and the Todoist project description created for each mapping (§5.4). This section is the schema reference for both, plus the one bit of state that's allowed to be ephemeral.
@@ -263,7 +275,7 @@ The two gauge kinds are a pair and should not be collapsed: the result gauge ans
 |---|---|---|
 | `sync_poll_runs_total{result}` | counter | `result="success"` \| `"error"`, one per poll cycle |
 | `sync_poll_duration_seconds` | histogram | Time taken per poll cycle |
-| `sync_reconcile_actions_total{action}` | counter | `action="project_created"` \| `"project_renamed"` \| `"project_archived"` \| `"project_unarchived"` \| `"project_recreated"` \| `"card_reattached"` \| `"project_marked_lost"` \| `"comment_posted"` \| `"card_updated"` |
+| `sync_reconcile_actions_total{action}` | counter | `action="project_created"` \| `"project_renamed"` \| `"project_archived"` \| `"project_unarchived"` \| `"project_recreated"` \| `"card_reattached"` \| `"project_marked_lost"` \| `"comment_posted"` \| `"card_updated"` \| `"stray_card_deleted"` |
 | `sync_digest_comments_posted_total` | counter | Digest comments actually posted (excludes runs skipped for having nothing to report) |
 
 **Upstream API health:**
