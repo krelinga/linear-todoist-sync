@@ -354,9 +354,29 @@ The Linear webhook URL contains the node's name, and the URL is registered once 
 
 **This work is subtractive, and there is no rule to add.** Tailscale has no deny rule and is deny-by-default, so "this tag gets nothing" is expressed by *no rule matching the tag* — not by a rule granting it nothing. An entry like `{ "action": "accept", "src": ["tag:webhook-ingress"], "dst": [] }` is not merely a no-op, it fails validation: an empty `dst` is rejected, and because `acls` still accepts the legacy `users`/`ports` field names, the validator falls back to legacy parsing and reports the confusing `users must be specified`.
 
-The actual task is to audit what already matches. A tagged node picks up every rule whose source matches it, and **the default policy a new tailnet ships with grants everything to everyone** — `{"src": ["*"], "dst": ["*"], "ip": ["*"]}` in the newer `grants` syntax, or a catch-all `src: ["*"]` under `acls` on older tailnets. Either one silently hands this node the whole tailnet. So check for, and narrow, any rule whose source is `*`, `autogroup:member`, or a group containing your own user.
+The actual task is to audit what already matches. A tagged node picks up every rule whose source matches it, and **the default policy a new tailnet ships with grants everything to everyone** — `{"src": ["*"], "dst": ["*"], "ip": ["*"]}` in the newer `grants` syntax, or a catch-all `src: ["*"]` under `acls` on older tailnets. Either one silently hands this node the whole tailnet.
 
-That narrowing is a tailnet-wide change rather than a property of this deployment, which is why it is worth doing deliberately and separately: **the rollout works without it, just with a less isolated node.** Nothing else in this design depends on it.
+On a tailnet carrying only the stock rule, the narrowing is a single word:
+
+```json
+// before — "*" matches tagged devices too
+{"action": "accept", "src": ["*"], "dst": ["*:*"]}
+
+// after
+{"action": "accept", "src": ["autogroup:member"], "dst": ["*:*"]}
+```
+
+`autogroup:member` covers human users who are direct members of the tailnet, and **tagged devices are not members**, so this removes the node as a *source* while leaving everything a person does untouched. The asymmetry is the right way round: `dst: ["*:*"]` still lets members reach *into* the node — scraping `:9464` over the tailnet, `tailscale ssh` to debug it — while the node itself can initiate nothing. Neither the Linear and Todoist API calls (ACLs govern tailnet traffic, not internet egress) nor Funnel ingress (the `funnel` node attribute, not `acls`) is affected.
+
+**Do this as part of the deployment, not afterwards.** It is a tailnet-wide edit, so it carries one pre-check worth making deliberately: look for any *other* tagged device that **initiates** connections — a backup agent, a CI runner, a tagged monitoring host that scrapes over the tailnet. Those lose access; pure receivers and subnet routers do not, because in a routed flow the ACL source is the originating device rather than the router forwarding it. With the webhook node as the only tagged device, there is nothing to weigh.
+
+Verify it took effect from the node itself, which is a stronger check than reading the policy back:
+
+```
+tailscale ping <any-other-node>     # must fail
+```
+
+A green ingress probe alongside that failure is the pair you want: the node can reach the internet and serve Funnel, and can reach nothing of yours.
 
 This is the cheap version of the isolation a dedicated VM would provide. A separate VM would additionally stop the receiver from sharing a kernel with the host's other containers — a real boundary, but a heavy one for a service whose worst-case compromise is a container that can reach two public APIs. A few lines of policy get most of the benefit for none of the ongoing maintenance (§13).
 
@@ -599,7 +619,7 @@ That is the whole alerting story: one rule for "reconciliation stopped" and one 
 
 Because the webhook is purely a nudge and adds no durable sync state, both directions are config-only — there is no migration, no backfill, and no state to reconcile.
 
-1. **Enable the tailnet prerequisites** (§6.1): HTTPS certs, MagicDNS, the `funnel` node attribute for `tag:webhook-ingress`, and the ACL constraining that tag (§6.4) — including a check that no pre-existing broad rule already grants it more than it needs. These are tailnet-wide settings and are the most likely thing to be missing on first attempt.
+1. **Enable the tailnet prerequisites** (§6.1, §6.4), all in the policy file and the DNS page: HTTPS certs, MagicDNS, `tagOwners` for `tag:webhook-ingress` (without which no auth key can carry the tag), the `funnel` node attribute for it, and the narrowing of any pre-existing broad rule that would otherwise grant that tag the run of the tailnet. These are tailnet-wide settings and are the most likely thing to be missing on first attempt. Confirm the narrowing with `tailscale ping` from the node once it is up — it must fail.
 2. **Deploy the sidecar topology with the receiver, keeping `POLL_INTERVAL_SECONDS=60`.** Nothing observable changes; polling still does all the work. Confirm with `tailscale funnel status` that exactly one path is public; with `ss -tlnp` on the host that nothing new bound a host port alongside Caddy (§6.3); and that Prometheus is still scraping after the `ports:` move (§6.3).
 3. **Register the webhook in Linear's UI** using the `.ts.net` URL (§4). Watch `sync_webhook_deliveries_total{result="accepted"}` climb as issues change.
 4. **Stand up the probe** (§8.2), and confirm that resolving the hostname *from inside the prober container* returns a public IP rather than a `100.x` address — a green probe proves nothing until you've checked this once.
