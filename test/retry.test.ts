@@ -118,3 +118,45 @@ describe('extractHttpStatus', () => {
     expect(httpRetryClassifier(wrapped)).toEqual({ retryable: true, retryAfterSeconds: 3 });
   });
 });
+
+describe('status extraction across SDK error shapes', () => {
+  // Each SDK spells this differently, and a spelling that is not recognised does not fail
+  // loudly - it silently disables retries, the rate_limited metric, and every other
+  // status-dependent branch for that client.
+  const shapes: [string, Record<string, unknown>][] = [
+    ['Linear (status)', { status: 429 }],
+    ['Todoist (httpStatusCode)', { httpStatusCode: 429 }],
+    ['fetch-style (statusCode)', { statusCode: 429 }],
+    ['nested (response.status)', { response: { status: 429 } }],
+  ];
+
+  it.each(shapes)('reads a status from %s', (_label, shape) => {
+    expect(extractHttpStatus(shape)).toBe(429);
+  });
+
+  it.each(shapes)('classifies %s as retryable', (_label, shape) => {
+    expect(httpRetryClassifier(shape)).toMatchObject({ retryable: true });
+  });
+
+  it('actually retries a Todoist-shaped 429', async () => {
+    // The regression this guards: TodoistRequestError was unrecognised, so withRetry gave up
+    // on the first attempt and §4.3's backoff applied to Linear only.
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('HTTP 429'), { httpStatusCode: 429 }))
+      .mockResolvedValue('ok');
+
+    await expect(withRetry(fn, { classify: httpRetryClassifier, sleep })).resolves.toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('finds a Todoist status through a wrapping ContextualError', () => {
+    const wrapped = new ContextualError(
+      'Todoist API request failed',
+      {},
+      Object.assign(new Error('HTTP 403'), { httpStatusCode: 403 }),
+    );
+    expect(extractHttpStatus(wrapped)).toBe(403);
+  });
+});
