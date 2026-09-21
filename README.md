@@ -18,6 +18,34 @@ exact `Linked Linear issue: <url>` marker it writes at creation time. Any
 other project - including one with a similar-looking but non-matching
 description - is left alone entirely.
 
+## Known limitation: moving an issue between teams
+
+A Todoist project is linked back to its issue by the issue's **identifier**
+(`ENG-123`), which Linear changes when an issue moves to another team. Nothing
+carries the link across that change, so the service sees the old project as
+belonging to an issue that no longer exists and the moved issue as having no
+project at all.
+
+Concretely, moving an in-progress `ENG-123` into another team as `OPS-45`
+leaves you with:
+
+- `[OPS-45] …` — a **new, empty** project for the issue under its new name
+- `[ENG-123] …` — the **original project, archived**, still holding every task
+- a comment on the issue reading *"Todoist mirror archived. This issue is no
+  longer in progress…"*, which is untrue — the issue is in progress, it simply
+  changed teams
+
+Nothing is deleted, but the work is now in an archived project and the comment
+is misleading. To recover: unarchive `[ENG-123] …` in Todoist, move its tasks
+into `[OPS-45] …`, and delete the emptied original. Doing it in that direction
+keeps the new project as the linked one, so the next poll leaves it alone.
+
+This is not worth guarding against in a single-team workspace, which is what
+this service is built for (see the design doc's §2.3 on scope). If you expect to
+move issues between teams routinely, this is the first thing to fix — matching
+on the issue's immutable id rather than its identifier, or re-linking the
+project when the identifier changes.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and fill in both API tokens:
