@@ -59,9 +59,10 @@ function fakeLinear(overrides: Partial<LinearPort> = {}): LinearPort {
   return {
     getStartedIssues: vi.fn().mockResolvedValue([]),
     getIssue: vi.fn().mockResolvedValue(null),
-    getMarkerAttachment: vi.fn().mockResolvedValue(null),
+    getMarkerAttachments: vi.fn().mockResolvedValue([]),
     createAttachment: vi.fn().mockResolvedValue(attachment()),
     updateAttachment: vi.fn().mockResolvedValue(undefined),
+    deleteAttachment: vi.fn().mockResolvedValue(undefined),
     createComment: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -138,9 +139,9 @@ describe('applyActions', () => {
   describe('unarchive_project', () => {
     it('unarchives and refreshes an existing card with a fresh count', async () => {
       const linear = fakeLinear({
-        getMarkerAttachment: vi
+        getMarkerAttachments: vi
           .fn()
-          .mockResolvedValue(attachment({ subtitle: '0 tasks outstanding' })),
+          .mockResolvedValue([attachment({ subtitle: '0 tasks outstanding' })]),
       });
       const todoist = fakeTodoist({
         getOutstandingTasks: vi.fn().mockResolvedValue({ tasks: [task()], sections: [] }),
@@ -159,7 +160,7 @@ describe('applyActions', () => {
     });
 
     it('self-heals by creating a card when none exists after unarchiving', async () => {
-      const linear = fakeLinear({ getMarkerAttachment: vi.fn().mockResolvedValue(null) });
+      const linear = fakeLinear({ getMarkerAttachments: vi.fn().mockResolvedValue([]) });
       const todoist = fakeTodoist();
       const metrics = createMetrics();
       const actions: Action[] = [{ kind: 'unarchive_project', project: project(), issue: issue() }];
@@ -245,7 +246,9 @@ describe('applyActions', () => {
 
   describe('archive_project', () => {
     it('posts a comment, archives, and freezes the card when tasks are outstanding', async () => {
-      const linear = fakeLinear({ getMarkerAttachment: vi.fn().mockResolvedValue(attachment()) });
+      const linear = fakeLinear({
+        getMarkerAttachments: vi.fn().mockResolvedValue([attachment()]),
+      });
       const todoist = fakeTodoist({
         getOutstandingTasks: vi.fn().mockResolvedValue({
           tasks: [task({ content: 'Task A' }), task({ id: 't2', content: 'Task B' })],
@@ -281,7 +284,9 @@ describe('applyActions', () => {
     });
 
     it('skips the comment when there are no outstanding tasks', async () => {
-      const linear = fakeLinear({ getMarkerAttachment: vi.fn().mockResolvedValue(attachment()) });
+      const linear = fakeLinear({
+        getMarkerAttachments: vi.fn().mockResolvedValue([attachment()]),
+      });
       const todoist = fakeTodoist();
       const metrics = createMetrics();
       const actions: Action[] = [
@@ -295,7 +300,7 @@ describe('applyActions', () => {
     });
 
     it('skips freezing the card when no attachment is found', async () => {
-      const linear = fakeLinear({ getMarkerAttachment: vi.fn().mockResolvedValue(null) });
+      const linear = fakeLinear({ getMarkerAttachments: vi.fn().mockResolvedValue([]) });
       const todoist = fakeTodoist();
       const metrics = createMetrics();
       const actions: Action[] = [
@@ -400,6 +405,39 @@ describe('applyActions', () => {
         'Failed to apply reconciliation action',
         expect.objectContaining({ action: 'archive_project', issueId: 'issue-42' }),
       );
+    });
+  });
+
+  describe('delete_stray_cards (#1)', () => {
+    it("deletes every stray and leaves the issue's own card alone", async () => {
+      const deleteAttachment = vi.fn().mockResolvedValue(undefined);
+      const linear = fakeLinear({ deleteAttachment });
+      const metrics = createMetrics();
+      const strays = [attachment({ id: 'att-a' }), attachment({ id: 'att-b' })];
+
+      const result = await applyActions(
+        [{ kind: 'delete_stray_cards', issue: issue(), attachments: strays }],
+        { linear, todoist: fakeTodoist(), metrics },
+      );
+
+      expect(result).toEqual({ succeeded: 1, failed: 0 });
+      expect(deleteAttachment.mock.calls.map((c) => c[0])).toEqual(['att-a', 'att-b']);
+      expect(await actionCounts(metrics)).toEqual({ stray_card_deleted: 2 });
+    });
+
+    it('never touches the Todoist project the stray pointed at', async () => {
+      // That project belongs to the duplicate issue, which is no longer started - the orphan
+      // path archives it on its own terms, and deleting projects is forbidden outright (§5.1).
+      const todoist = fakeTodoist();
+      const linear = fakeLinear({ deleteAttachment: vi.fn().mockResolvedValue(undefined) });
+
+      await applyActions(
+        [{ kind: 'delete_stray_cards', issue: issue(), attachments: [attachment()] }],
+        { linear, todoist, metrics: createMetrics() },
+      );
+
+      expect(todoist.archiveProject).not.toHaveBeenCalled();
+      expect(todoist.updateProject).not.toHaveBeenCalled();
     });
   });
 });

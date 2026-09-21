@@ -52,9 +52,10 @@ function fakeLinear(overrides: Partial<LinearPort> = {}): LinearPort {
   return {
     getStartedIssues: vi.fn().mockResolvedValue([issue()]),
     getIssue: vi.fn().mockResolvedValue(null),
-    getMarkerAttachment: vi.fn().mockResolvedValue(attachment()),
+    getMarkerAttachments: vi.fn().mockResolvedValue([attachment()]),
     createAttachment: vi.fn(),
     updateAttachment: vi.fn().mockResolvedValue(undefined),
+    deleteAttachment: vi.fn().mockResolvedValue(undefined),
     createComment: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -113,7 +114,7 @@ describe('runDigestJob', () => {
 
   it('reads since the stored lastDigestAt watermark, not the epoch, when one exists', async () => {
     const linear = fakeLinear({
-      getMarkerAttachment: vi.fn().mockResolvedValue(
+      getMarkerAttachments: vi.fn().mockResolvedValue([
         attachment({
           metadata: {
             syncApp: 'linear-todoist-sync',
@@ -121,7 +122,7 @@ describe('runDigestJob', () => {
             lastDigestAt: '2026-08-08T00:00:00.000Z',
           },
         }),
-      ),
+      ]),
     });
     const getCompletedTasksSince = vi.fn().mockResolvedValue([]);
     const todoist = fakeTodoist({ getCompletedTasksSince });
@@ -176,7 +177,7 @@ describe('runDigestJob', () => {
   });
 
   it('skips a mapping with an active project but no card yet, without failing the run', async () => {
-    const linear = fakeLinear({ getMarkerAttachment: vi.fn().mockResolvedValue(null) });
+    const linear = fakeLinear({ getMarkerAttachments: vi.fn().mockResolvedValue([]) });
     const todoist = fakeTodoist();
     const metrics = createMetrics();
 
@@ -261,13 +262,15 @@ describe('runDigestJob', () => {
     it("names the issue and project when one mapping's digest fails", async () => {
       const linear = fakeLinear({
         getStartedIssues: vi.fn().mockResolvedValue([issue()]),
-        getMarkerAttachment: vi.fn().mockResolvedValue({
-          id: 'att-1',
-          url: project().url,
-          title: '[ENG-1] Fix the thing',
-          subtitle: '0 tasks outstanding',
-          metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
-        }),
+        getMarkerAttachments: vi.fn().mockResolvedValue([
+          {
+            id: 'att-1',
+            url: project().url,
+            title: '[ENG-1] Fix the thing',
+            subtitle: '0 tasks outstanding',
+            metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
+          },
+        ]),
         createComment: vi.fn().mockRejectedValue(new Error('503 Service Unavailable')),
       });
       const todoist = fakeTodoist({

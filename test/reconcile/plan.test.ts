@@ -26,7 +26,8 @@ function project(overrides: Partial<TodoistProjectSummary> = {}): TodoistProject
     id: 'proj-1',
     name: '[ENG-1] Fix the flaky login test',
     url: 'https://todoist.com/showProject?id=proj-1',
-    description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
+    description:
+      'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
     isArchived: false,
     ...overrides,
   };
@@ -44,7 +45,13 @@ function attachment(overrides: Partial<LinearAttachmentSummary> = {}): LinearAtt
 }
 
 function mapping(overrides: Partial<IssueMapping> = {}): IssueMapping {
-  return { issue: issue(), matchedProject: null, attachment: null, ...overrides };
+  return {
+    issue: issue(),
+    matchedProject: null,
+    attachment: null,
+    strayAttachments: [],
+    ...overrides,
+  };
 }
 
 function orphan(overrides: Partial<OrphanedProject> = {}): OrphanedProject {
@@ -78,7 +85,9 @@ describe('planActions - §5.1 Linear-originated transitions', () => {
   it('archives the project when its issue moved to another state', () => {
     const active = project();
     const movedIssue = issue({ stateType: 'completed' });
-    const actions = planActions(snapshot([], [orphan({ project: active, linkedIssue: movedIssue })]));
+    const actions = planActions(
+      snapshot([], [orphan({ project: active, linkedIssue: movedIssue })]),
+    );
     expect(actions).toEqual([
       { kind: 'archive_project', project: active, linkedIssueId: movedIssue.id },
     ]);
@@ -152,15 +161,24 @@ describe('planActions - already-archived orphan with a still-nonexistent issue',
   it('takes no action when an orphaned project is already archived and correctly not started', () => {
     const archived = project({ isArchived: true });
     const stillActiveIssue = issue({ stateType: 'canceled' });
-    const actions = planActions(snapshot([], [orphan({ project: archived, linkedIssue: stillActiveIssue })]));
+    const actions = planActions(
+      snapshot([], [orphan({ project: archived, linkedIssue: stillActiveIssue })]),
+    );
     expect(actions).toEqual([]);
   });
 });
 
 describe('planActions - aggregation across a full snapshot', () => {
   it('produces independent actions for every mapping and orphan in one pass', () => {
-    const newIssue = issue({ id: 'issue-2', identifier: 'ENG-2', url: 'https://linear.app/acme/issue/ENG-2' });
-    const orphanedProject = project({ id: 'proj-9', description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-9' });
+    const newIssue = issue({
+      id: 'issue-2',
+      identifier: 'ENG-2',
+      url: 'https://linear.app/acme/issue/ENG-2',
+    });
+    const orphanedProject = project({
+      id: 'proj-9',
+      description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-9',
+    });
     const orphanedIssue = issue({ id: 'issue-9', identifier: 'ENG-9', stateType: 'done' });
 
     const actions = planActions(
@@ -174,5 +192,43 @@ describe('planActions - aggregation across a full snapshot', () => {
       { kind: 'create_project', issue: newIssue },
       { kind: 'archive_project', project: orphanedProject, linkedIssueId: orphanedIssue.id },
     ]);
+  });
+
+  describe('stray cards from a duplicate (#1)', () => {
+    const stray = attachment({ id: 'att-moved', url: 'https://todoist.com/showProject?id=B' });
+
+    it('schedules deletion alongside the steady-state refresh', () => {
+      const actions = planActions(
+        snapshot([
+          mapping({
+            matchedProject: project(),
+            attachment: attachment(),
+            strayAttachments: [stray],
+          }),
+        ]),
+      );
+
+      expect(actions).toEqual([
+        { kind: 'delete_stray_cards', issue: issue(), attachments: [stray] },
+        { kind: 'refresh_card', attachment: attachment(), project: project(), issue: issue() },
+      ]);
+    });
+
+    it('schedules deletion even when the project must be created from scratch', () => {
+      const actions = planActions(snapshot([mapping({ strayAttachments: [stray] })]));
+
+      expect(actions).toEqual([
+        { kind: 'delete_stray_cards', issue: issue(), attachments: [stray] },
+        { kind: 'create_project', issue: issue() },
+      ]);
+    });
+
+    it('emits nothing extra when there are no strays', () => {
+      const actions = planActions(
+        snapshot([mapping({ matchedProject: project(), attachment: attachment() })]),
+      );
+
+      expect(actions.some((a) => a.kind === 'delete_stray_cards')).toBe(false);
+    });
   });
 });

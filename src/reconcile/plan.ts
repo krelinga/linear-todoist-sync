@@ -25,22 +25,29 @@ export function planActions(snapshot: Snapshot): Action[] {
 }
 
 function planForMapping(mapping: Snapshot['mappings'][number]): Action[] {
-  const { issue, matchedProject, attachment } = mapping;
+  const { issue, matchedProject, attachment, strayAttachments } = mapping;
+
+  // Independent of everything below: these belong to an issue this one absorbed as a duplicate
+  // (§5.5), and are removed whatever else this mapping turns out to need.
+  const strays: Action[] =
+    strayAttachments.length > 0
+      ? [{ kind: 'delete_stray_cards', issue, attachments: strayAttachments }]
+      : [];
 
   if (!matchedProject) {
     // §5.1 "issue enters started": no active or archived project found at all.
     return attachment
       ? // §5.2 row 3: an attachment still points at a project that's now gone entirely.
-        [{ kind: 'recreate_project', issue, previousProjectUrl: attachment.url }]
-      : [{ kind: 'create_project', issue }];
+        [...strays, { kind: 'recreate_project', issue, previousProjectUrl: attachment.url }]
+      : [...strays, { kind: 'create_project', issue }];
   }
 
   if (matchedProject.isArchived) {
     // §5.1 "issue enters started" (re-entering) / §5.2 row 1: Linear owns the lifecycle.
-    return [{ kind: 'unarchive_project', project: matchedProject, issue }];
+    return [...strays, { kind: 'unarchive_project', project: matchedProject, issue }];
   }
 
-  const actions: Action[] = [];
+  const actions: Action[] = [...strays];
 
   // §5.1 "title changes" / §5.2 row 2: "Linear wins" regardless of which side drifted.
   if (matchedProject.name !== buildProjectName(issue.identifier, issue.title)) {

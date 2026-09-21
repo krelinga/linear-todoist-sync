@@ -57,14 +57,16 @@ export interface LinearSdkClient {
   createAttachment(input: Record<string, unknown>): Promise<RawAttachmentPayload>;
   updateAttachment(id: string, input: Record<string, unknown>): Promise<unknown>;
   createComment(input: Record<string, unknown>): Promise<unknown>;
+  deleteAttachment(id: string): Promise<unknown>;
 }
 
 export interface LinearPort {
   getStartedIssues(): Promise<LinearIssueSummary[]>;
   getIssue(id: string): Promise<LinearIssueSummary | null>;
-  getMarkerAttachment(issueId: string): Promise<LinearAttachmentSummary | null>;
+  getMarkerAttachments(issueId: string): Promise<LinearAttachmentSummary[]>;
   createAttachment(input: CreateAttachmentInput): Promise<LinearAttachmentSummary>;
   updateAttachment(id: string, input: UpdateAttachmentInput): Promise<void>;
+  deleteAttachment(id: string): Promise<void>;
   createComment(issueId: string, body: string): Promise<void>;
 }
 
@@ -172,18 +174,32 @@ export class LinearClient implements LinearPort {
     return issue ? toSummary(issue, await this.resolveStateType(issue)) : null;
   }
 
-  async getMarkerAttachment(issueId: string): Promise<LinearAttachmentSummary | null> {
+  /**
+   * Every card this service owns on the issue, in the order Linear returns them.
+   *
+   * Plural rather than "find the first" because an issue can legitimately end up holding more
+   * than one: **marking an issue a duplicate moves the duplicate's attachments onto the
+   * canonical issue** (#1, verified live - the moved card arrives *ahead* of the issue's own in
+   * Linear's ordering). Taking the first match silently adopted the wrong card and maintained
+   * it from then on. Deciding which one to keep needs the Todoist project to compare against,
+   * which only the reconciler has, so this returns all of them and does not choose.
+   */
+  async getMarkerAttachments(issueId: string): Promise<LinearAttachmentSummary[]> {
     const issue = await this.getIssueRaw(issueId);
     if (!issue) {
-      return null;
+      return [];
     }
     const { nodes } = await this.call(
       'issue.attachments',
       { issueId, issue: issue.identifier },
       () => issue.attachments(),
     );
-    const marker = nodes.find((attachment) => isMarkerAttachment(attachment.metadata));
-    return marker ? toAttachmentSummary(marker) : null;
+    return nodes.filter((a) => isMarkerAttachment(a.metadata)).map(toAttachmentSummary);
+  }
+
+  async deleteAttachment(id: string): Promise<void> {
+    await this.call('attachmentDelete', { attachmentId: id }, () => this.sdk.deleteAttachment(id));
+    logger.info('Deleted Linear attachment', { system: 'linear', attachmentId: id });
   }
 
   private async getIssueRaw(id: string): Promise<RawIssue | null> {

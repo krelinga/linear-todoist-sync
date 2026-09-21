@@ -56,6 +56,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
       const result = await client.getStartedIssues();
@@ -82,6 +83,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
       const result = await client.getStartedIssues();
@@ -99,6 +101,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
       const result = await client.getIssue('ENG-1');
@@ -112,6 +115,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
       await expect(client.getIssue('ENG-404')).resolves.toBeNull();
@@ -137,8 +141,8 @@ describe('LinearClient', () => {
     });
   });
 
-  describe('getMarkerAttachment', () => {
-    it('returns null when the issue has no marker attachment', async () => {
+  describe('getMarkerAttachments', () => {
+    it('returns an empty list when the issue has no marker attachment', async () => {
       const issue = rawIssue({});
       const sdk: LinearSdkClient = {
         issues: vi.fn(),
@@ -146,12 +150,13 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
-      await expect(client.getMarkerAttachment('issue-1')).resolves.toBeNull();
+      await expect(client.getMarkerAttachments('issue-1')).resolves.toEqual([]);
     });
 
-    it('returns the marker attachment when present among others', async () => {
+    it('returns the marker attachment, ignoring attachments this service does not own', async () => {
       const other: RawAttachment = {
         id: 'att-other',
         url: 'https://github.com/acme/repo/pull/1',
@@ -175,28 +180,65 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
-      const result = await client.getMarkerAttachment('issue-1');
-      expect(result).toEqual({
-        id: 'att-marker',
-        url: 'https://todoist.com/showProject?id=123',
-        title: '[ENG-1] Fix the thing',
-        subtitle: '3 tasks outstanding',
-        metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
-      });
+      const result = await client.getMarkerAttachments('issue-1');
+      expect(result).toEqual([
+        {
+          id: 'att-marker',
+          url: 'https://todoist.com/showProject?id=123',
+          title: '[ENG-1] Fix the thing',
+          subtitle: '3 tasks outstanding',
+          metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
+        },
+      ]);
     });
 
-    it('returns null when the issue itself no longer exists', async () => {
+    it("returns every marker card, in Linear's order, when an issue holds more than one", async () => {
+      // Marking an issue a duplicate moves the duplicate's attachments onto the canonical
+      // issue, and the moved card arrives ahead of the issue's own (#1). Returning both is
+      // what lets the reconciler tell them apart.
+      const card = (id: string, url: string): RawAttachment => ({
+        id,
+        url,
+        title: 'card',
+        subtitle: null,
+        metadata: { syncApp: 'linear-todoist-sync', schemaVersion: 1 },
+      });
+      const issue = rawIssue({
+        attachments: vi.fn().mockResolvedValue({
+          nodes: [
+            card('att-moved', 'https://todoist.com/showProject?id=B'),
+            card('att-own', 'https://todoist.com/showProject?id=A'),
+          ],
+        }),
+      });
+      const sdk: LinearSdkClient = {
+        issues: vi.fn(),
+        issue: vi.fn().mockResolvedValue(issue),
+        createAttachment: vi.fn(),
+        updateAttachment: vi.fn(),
+        createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
+      };
+
+      const result = await new LinearClient(sdk).getMarkerAttachments('issue-1');
+
+      expect(result.map((a) => a.id)).toEqual(['att-moved', 'att-own']);
+    });
+
+    it('returns an empty list when the issue itself no longer exists', async () => {
       const sdk: LinearSdkClient = {
         issues: vi.fn(),
         issue: vi.fn().mockRejectedValue(httpError(404)),
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
-      await expect(client.getMarkerAttachment('issue-1')).resolves.toBeNull();
+      await expect(client.getMarkerAttachments('issue-1')).resolves.toEqual([]);
     });
   });
 
@@ -217,6 +259,7 @@ describe('LinearClient', () => {
         createAttachment,
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
       const result = await client.createAttachment({
@@ -251,6 +294,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn().mockResolvedValue(payload),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
       await expect(
@@ -273,6 +317,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn().mockResolvedValue(payload),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
       await expect(
@@ -384,6 +429,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
 
@@ -408,6 +454,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn().mockRejectedValue(httpError(403)),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
 
@@ -427,6 +474,7 @@ describe('LinearClient', () => {
         createAttachment: vi.fn().mockResolvedValue({ attachment: undefined }),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
       };
       const client = new LinearClient(sdk);
 
