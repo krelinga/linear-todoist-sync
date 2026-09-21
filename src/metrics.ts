@@ -2,12 +2,40 @@ import { Counter, Gauge, Histogram, Registry } from 'prom-client';
 
 export type Metrics = ReturnType<typeof createMetrics>;
 
+/**
+ * Suppresses a gauge's export until something actually writes to it.
+ *
+ * prom-client seeds an unlabelled gauge with 0 and exports it from the very first scrape -
+ * before the event the gauge describes has happened. For a "time of the last X" gauge that is
+ * actively harmful, because these exist to be read as `time() - gauge` and a 0 makes that
+ * difference the whole Unix epoch: a scrape landing in that window reports ~56 years of
+ * staleness and trips any alert built on it. The digest gauge is where it bites, since the
+ * digest runs once a day and the window can be most of a day wide (§7).
+ *
+ * Every placeholder value is a lie of some kind, so the gauge reports nothing instead. Seeding
+ * with process start would read as "a digest just ran", which resets staleness on every restart
+ * and blinds the alert to a crash loop.
+ *
+ * `remove()` drops the sample while leaving the HELP and TYPE lines in place, so the metric
+ * stays declared and documented and simply has no value yet. A later `set()` restores it.
+ *
+ * **This makes no-data handling the consumer's job**, which is the trade being made: a
+ * dashboard or alert that carries the last observed value across a gap gets the better
+ * behaviour, since staleness then accumulates from the last real event rather than restarting
+ * with the process. One that treats no-data as zero gets the original bug back, and one that
+ * drops the series silently will not alert at all - see §8.1.
+ */
+function unsetUntilFirstWrite(gauge: Gauge<string>): void {
+  gauge.remove();
+}
+
 export function createMetrics(registry: Registry = new Registry()) {
   const lastPollSuccessTimestampSeconds = new Gauge({
     name: 'sync_last_poll_success_timestamp_seconds',
-    help: 'Unix time of the last poll that completed without error.',
+    help: 'Unix time of the last poll that completed without error. Absent until one has.',
     registers: [registry],
   });
+  unsetUntilFirstWrite(lastPollSuccessTimestampSeconds);
 
   const lastPollResult = new Gauge({
     name: 'sync_last_poll_result',
@@ -17,9 +45,10 @@ export function createMetrics(registry: Registry = new Registry()) {
 
   const lastDigestRunTimestampSeconds = new Gauge({
     name: 'sync_last_digest_run_timestamp_seconds',
-    help: 'Unix time of the last completed digest run.',
+    help: 'Unix time of the last completed digest run. Absent until one has completed.',
     registers: [registry],
   });
+  unsetUntilFirstWrite(lastDigestRunTimestampSeconds);
 
   const lastDigestResult = new Gauge({
     name: 'sync_last_digest_result',
@@ -49,9 +78,10 @@ export function createMetrics(registry: Registry = new Registry()) {
 
   const lastWebhookReceivedTimestampSeconds = new Gauge({
     name: 'sync_last_webhook_received_timestamp_seconds',
-    help: 'Unix time of the last verified webhook delivery. Diagnostic only - a quiet workspace and a broken webhook look identical here.',
+    help: 'Unix time of the last verified webhook delivery. Absent until one arrives. Diagnostic only - a quiet workspace and a broken webhook look identical here.',
     registers: [registry],
   });
+  unsetUntilFirstWrite(lastWebhookReceivedTimestampSeconds);
 
   const pollDurationSeconds = new Histogram({
     name: 'sync_poll_duration_seconds',

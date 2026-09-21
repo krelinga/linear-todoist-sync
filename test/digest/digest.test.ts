@@ -113,17 +113,15 @@ describe('runDigestJob', () => {
 
   it('reads since the stored lastDigestAt watermark, not the epoch, when one exists', async () => {
     const linear = fakeLinear({
-      getMarkerAttachment: vi
-        .fn()
-        .mockResolvedValue(
-          attachment({
-            metadata: {
-              syncApp: 'linear-todoist-sync',
-              schemaVersion: 1,
-              lastDigestAt: '2026-08-08T00:00:00.000Z',
-            },
-          }),
-        ),
+      getMarkerAttachment: vi.fn().mockResolvedValue(
+        attachment({
+          metadata: {
+            syncApp: 'linear-todoist-sync',
+            schemaVersion: 1,
+            lastDigestAt: '2026-08-08T00:00:00.000Z',
+          },
+        }),
+      ),
     });
     const getCompletedTasksSince = vi.fn().mockResolvedValue([]);
     const todoist = fakeTodoist({ getCompletedTasksSince });
@@ -190,15 +188,13 @@ describe('runDigestJob', () => {
 
   it('excludes mappings whose matched project is archived', async () => {
     const linear = fakeLinear();
-    const getCompletedTasksSince = vi
-      .fn()
-      .mockResolvedValue([
-        {
-          content: 'Should not be reported',
-          completedAt: '2026-08-09T00:00:00.000Z',
-          sectionId: null,
-        },
-      ]);
+    const getCompletedTasksSince = vi.fn().mockResolvedValue([
+      {
+        content: 'Should not be reported',
+        completedAt: '2026-08-09T00:00:00.000Z',
+        sectionId: null,
+      },
+    ]);
     const todoist = fakeTodoist({
       getMarkedProjects: vi.fn().mockResolvedValue([project({ isArchived: true })]),
       getCompletedTasksSince,
@@ -219,7 +215,9 @@ describe('runDigestJob', () => {
     await runDigestJob({ linear, todoist, metrics });
 
     expect(await gaugeValue(metrics, 'sync_last_digest_result')).toBe(0);
-    expect(await gaugeValue(metrics, 'sync_last_digest_run_timestamp_seconds')).toBe(0);
+    // Not 0 - the timestamp gauge reports no sample until a run actually completes, so that
+    // `time() - gauge` is never the whole Unix epoch (see metrics.ts).
+    expect(await gaugeValue(metrics, 'sync_last_digest_run_timestamp_seconds')).toBeUndefined();
   });
 
   it('continues to the next mapping and marks the run failed when one mapping errors', async () => {
