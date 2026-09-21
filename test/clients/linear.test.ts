@@ -31,6 +31,7 @@ function rawIssue(
     updatedAt: new Date('2026-08-01T00:00:00.000Z'),
     state: Promise.resolve({ type: stateType ?? 'started' }),
     attachments: vi.fn().mockResolvedValue({ nodes: [] }),
+    relations: vi.fn().mockResolvedValue({ nodes: [] }),
     ...rest,
   };
 }
@@ -490,6 +491,64 @@ describe('LinearClient', () => {
 
       expect((err as Error).message).toContain('issueId=issue-1');
       expect((err as Error).message).toContain('title=[ENG-1] Fix the thing');
+    });
+  });
+
+  describe('getDuplicateOf', () => {
+    const sdkFor = (issue: unknown): LinearSdkClient => ({
+      issues: vi.fn(),
+      issue: vi.fn().mockResolvedValue(issue),
+      createAttachment: vi.fn(),
+      updateAttachment: vi.fn(),
+      createComment: vi.fn(),
+      deleteAttachment: vi.fn(),
+    });
+
+    it('returns the issue this one was marked a duplicate of', async () => {
+      // Linear models it as a directed relation on the duplicate, so reading from this side
+      // answers it in one call.
+      const canonical = rawIssue({ id: 'issue-9', identifier: 'ENG-9' });
+      const issue = rawIssue({
+        relations: vi.fn().mockResolvedValue({
+          nodes: [{ type: 'duplicate', relatedIssue: Promise.resolve(canonical) }],
+        }),
+      });
+
+      const result = await new LinearClient(sdkFor(issue)).getDuplicateOf('issue-1');
+
+      expect(result?.identifier).toBe('ENG-9');
+    });
+
+    it('ignores relations of other kinds', async () => {
+      const other = rawIssue({ id: 'issue-2', identifier: 'ENG-2' });
+      const issue = rawIssue({
+        relations: vi.fn().mockResolvedValue({
+          nodes: [
+            { type: 'blocks', relatedIssue: Promise.resolve(other) },
+            { type: 'related', relatedIssue: Promise.resolve(other) },
+          ],
+        }),
+      });
+
+      await expect(new LinearClient(sdkFor(issue)).getDuplicateOf('issue-1')).resolves.toBeNull();
+    });
+
+    it('returns null when the issue has no relations at all', async () => {
+      await expect(
+        new LinearClient(sdkFor(rawIssue({}))).getDuplicateOf('issue-1'),
+      ).resolves.toBeNull();
+    });
+
+    it('returns null when the issue itself is gone', async () => {
+      const sdk: LinearSdkClient = {
+        issues: vi.fn(),
+        issue: vi.fn().mockRejectedValue(httpError(404)),
+        createAttachment: vi.fn(),
+        updateAttachment: vi.fn(),
+        createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
+      };
+      await expect(new LinearClient(sdk).getDuplicateOf('issue-1')).resolves.toBeNull();
     });
   });
 });
