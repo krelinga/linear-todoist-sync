@@ -8,7 +8,8 @@ export const ATTACHMENT_SCHEMA_VERSION = 1;
 export const LINKED_ISSUE_MARKER_PREFIX = 'Linked Linear issue: ';
 
 /** Publicly hosted Todoist icon for the Linear attachment card (§5.4). */
-export const TODOIST_ICON_URL = 'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/todoist.png';
+export const TODOIST_ICON_URL =
+  'https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/todoist.png';
 
 /** Prefix applied when an in-progress issue is deleted outright (§5.1). Idempotent by design. */
 const LOST_PREFIX = '[LOST] ';
@@ -40,6 +41,31 @@ export function parseLinkedIssueUrl(description: string): string | null {
   const raw = description.slice(LINKED_ISSUE_MARKER_PREFIX.length).trim();
   const url = MARKDOWN_LINK.exec(raw)?.[1] ?? raw;
   return url.length > 0 ? url : null;
+}
+
+/**
+ * Whether a card's URL points at a given Todoist project.
+ *
+ * A predicate rather than "parse the id out of the URL" because the id is always already known
+ * at the call site, and parsing one out blind means guessing where it starts: a Todoist project
+ * URL is `.../project/<name-slug>-<id>`, and nothing in the string says which hyphen separates
+ * them. Comparing against a known id sidesteps that entirely.
+ *
+ * Matching on id rather than on the whole URL is what makes this survive a rename. The URL
+ * embeds a slug of the project's name, this service renames projects whenever the Linear
+ * issue's title changes (§5.1), and a card's URL is written once at creation and never
+ * rewritten - so the two diverge on the first rename while the id stays put.
+ *
+ * Also understands Todoist's older `showProject?id=` form, for cards written before the URL
+ * scheme changed.
+ */
+export function cardPointsAtProject(cardUrl: string, projectId: string): boolean {
+  const query = /[?&]id=([^&#]+)/.exec(cardUrl);
+  if (query) {
+    return query[1] === projectId;
+  }
+  const segment = /\/project\/([^/?#]+)/.exec(cardUrl)?.[1];
+  return segment === projectId || segment?.endsWith(`-${projectId}`) === true;
 }
 
 export function isLostProject(name: string): boolean {

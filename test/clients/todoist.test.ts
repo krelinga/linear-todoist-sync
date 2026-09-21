@@ -183,7 +183,11 @@ describe('TodoistClient', () => {
       const result = await client.getCompletedTasksSince('proj-1', '2026-08-01T00:00:00.000Z');
 
       expect(result).toEqual([
-        { content: 'Done thing', completedAt: '2026-08-09T12:00:00.000Z', sectionId: null },
+        {
+          content: 'Done thing',
+          completedAt: '2026-08-09T12:00:00.000Z',
+          sectionId: null,
+        },
       ]);
       expect(getActivityLogs).toHaveBeenCalledTimes(2);
       expect(getActivityLogs.mock.calls[0]?.[0]).toMatchObject({

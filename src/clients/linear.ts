@@ -26,6 +26,11 @@ export interface RawAttachment {
   metadata: Record<string, unknown>;
 }
 
+export interface RawIssueRelation {
+  type: string;
+  relatedIssue: Promise<RawIssue | undefined> | undefined;
+}
+
 export interface RawIssue {
   id: string;
   identifier: string;
@@ -34,6 +39,7 @@ export interface RawIssue {
   updatedAt: Date;
   state: Promise<RawWorkflowState> | undefined;
   attachments(): Promise<{ nodes: RawAttachment[] }>;
+  relations(): Promise<{ nodes: RawIssueRelation[] }>;
 }
 
 export interface RawConnection<T> {
@@ -64,6 +70,7 @@ export interface LinearPort {
   getStartedIssues(): Promise<LinearIssueSummary[]>;
   getIssue(id: string): Promise<LinearIssueSummary | null>;
   getMarkerAttachments(issueId: string): Promise<LinearAttachmentSummary[]>;
+  getDuplicateOf(issueId: string): Promise<LinearIssueSummary | null>;
   createAttachment(input: CreateAttachmentInput): Promise<LinearAttachmentSummary>;
   updateAttachment(id: string, input: UpdateAttachmentInput): Promise<void>;
   deleteAttachment(id: string): Promise<void>;
@@ -195,6 +202,30 @@ export class LinearClient implements LinearPort {
       () => issue.attachments(),
     );
     return nodes.filter((a) => isMarkerAttachment(a.metadata)).map(toAttachmentSummary);
+  }
+
+  /**
+   * The issue this one was marked a duplicate *of*, or null if it was not.
+   *
+   * Linear models this as a directed relation on the duplicate itself - `relations()` on the
+   * duplicate yields `type: "duplicate"` pointing at the canonical issue, and the canonical
+   * issue sees the same relation through `inverseRelations()`. Read from this side so one call
+   * answers it.
+   *
+   * Only needed when a mapping is being closed out (§5.5), so the cost is per archive rather
+   * than per cycle.
+   */
+  async getDuplicateOf(issueId: string): Promise<LinearIssueSummary | null> {
+    const issue = await this.getIssueRaw(issueId);
+    if (!issue) {
+      return null;
+    }
+    const { nodes } = await this.call('issue.relations', { issueId, issue: issue.identifier }, () =>
+      issue.relations(),
+    );
+    const duplicate = nodes.find((relation) => relation.type === 'duplicate');
+    const related = await duplicate?.relatedIssue;
+    return related ? toSummary(related, await this.resolveStateType(related)) : null;
   }
 
   async deleteAttachment(id: string): Promise<void> {

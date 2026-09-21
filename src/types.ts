@@ -89,6 +89,13 @@ export type OrphanedProject = {
   project: TodoistProjectSummary;
   /** The linked issue's current state, or null if that issue no longer exists at all. */
   linkedIssue: LinearIssueSummary | null;
+  /**
+   * This project's card, found among the strays on some *other* issue - which happens when the
+   * linked issue was absorbed as a duplicate and Linear moved its card away (§5.5). Captured
+   * here at discovery because the card carries the digest watermark and is about to be deleted;
+   * the metadata is what matters, not the card's continued existence.
+   */
+  displacedCard: LinearAttachmentSummary | null;
 };
 
 export type Snapshot = {
@@ -113,7 +120,13 @@ export type Action =
       project: TodoistProjectSummary;
       issue: LinearIssueSummary;
     }
-  | { kind: 'archive_project'; project: TodoistProjectSummary; linkedIssueId: string }
+  | {
+      kind: 'archive_project';
+      project: TodoistProjectSummary;
+      linkedIssueId: string;
+      /** Carries the watermark when the linked issue no longer holds its own card (§5.5). */
+      displacedCard: LinearAttachmentSummary | null;
+    }
   | { kind: 'mark_lost'; project: TodoistProjectSummary }
   | {
       kind: 'delete_stray_cards';

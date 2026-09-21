@@ -138,7 +138,11 @@ describe('discover', () => {
     const snapshot = await discover(linear, todoist);
 
     expect(snapshot.orphans).toEqual([
-      { project: orphanProject, linkedIssue: issue({ stateType: 'completed' }) },
+      {
+        project: orphanProject,
+        linkedIssue: issue({ stateType: 'completed' }),
+        displacedCard: null,
+      },
     ]);
     expect(linear.getIssue).toHaveBeenCalledWith('ENG-1');
   });
@@ -150,7 +154,9 @@ describe('discover', () => {
 
     const snapshot = await discover(linear, todoist);
 
-    expect(snapshot.orphans).toEqual([{ project: orphanProject, linkedIssue: null }]);
+    expect(snapshot.orphans).toEqual([
+      { project: orphanProject, linkedIssue: null, displacedCard: null },
+    ]);
   });
 
   it('does not look up an issue for an orphan whose description has no parseable marker URL', async () => {
@@ -160,7 +166,9 @@ describe('discover', () => {
 
     const snapshot = await discover(linear, todoist);
 
-    expect(snapshot.orphans).toEqual([{ project: malformed, linkedIssue: null }]);
+    expect(snapshot.orphans).toEqual([
+      { project: malformed, linkedIssue: null, displacedCard: null },
+    ]);
     expect(linear.getIssue).not.toHaveBeenCalled();
   });
 
@@ -182,7 +190,7 @@ describe('discover', () => {
     const snapshot = await discover(linear, todoist);
 
     expect(snapshot.mappings[0]?.matchedProject).toEqual(matched);
-    expect(snapshot.orphans).toEqual([{ project: other, linkedIssue: null }]);
+    expect(snapshot.orphans).toEqual([{ project: other, linkedIssue: null, displacedCard: null }]);
   });
 
   describe('error context', () => {
@@ -261,6 +269,31 @@ describe('discover', () => {
       expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-moved']);
     });
 
+    it("keeps the issue's own card even after the project was renamed", async () => {
+      // A project URL embeds a slug of its name and the service renames projects on every
+      // title change, but a card's URL is written once at creation. Comparing URLs would find
+      // no match here, fall back to position, and delete the issue's own card as the stray -
+      // with the moved card listed first, that is exactly backwards.
+      const renamed = project({
+        id: 'proj-1',
+        url: 'https://app.todoist.com/app/project/eng-1-a-brand-new-title-proj-1',
+      });
+      const ownWithStaleUrl = attachment({
+        id: 'att-own',
+        url: 'https://app.todoist.com/app/project/eng-1-the-original-title-proj-1',
+      });
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([moved, ownWithStaleUrl]),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([renamed]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.attachment?.id).toBe('att-own');
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-moved']);
+    });
+
     it('reports no strays when the only card is the right one', async () => {
       const linear = fakeLinear({
         getStartedIssues: vi.fn().mockResolvedValue([issue()]),
@@ -273,9 +306,47 @@ describe('discover', () => {
       expect(snapshot.mappings[0]?.strayAttachments).toEqual([]);
     });
 
-    it('falls back to the first card when there is no project to compare against', async () => {
-      // Nothing distinguishes them here; planning will recreate the project, and the next
-      // cycle matches the fresh card by URL.
+    it('does not adopt a displaced card when the project it names still exists', async () => {
+      // An issue sitting in the backlog absorbs a duplicate: Linear moves the duplicate's card
+      // onto it, and it has no project of its own. Adopting that card made planning announce
+      // "the previously linked project appears to have been deleted outright" - about a
+      // project that was alive, archived, and had never belonged to this issue.
+      const absorbed = project({ id: 'proj-dup', isArchived: true });
+      const displaced = attachment({ id: 'att-displaced', url: absorbed.url });
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([displaced]),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([absorbed]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.attachment).toBeNull();
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-displaced']);
+    });
+
+    it('does adopt a card whose project has genuinely vanished (§5.2 row 3)', async () => {
+      // The opposite case, and the reason the check is "does the project still exist" rather
+      // than "is there a matched project": here recreate_project is exactly right.
+      const gone = attachment({
+        id: 'att-gone',
+        url: 'https://todoist.com/showProject?id=deleted',
+      });
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([gone]),
+      });
+
+      const snapshot = await discover(linear, fakeTodoist());
+
+      expect(snapshot.mappings[0]?.attachment?.id).toBe('att-gone');
+      expect(snapshot.mappings[0]?.strayAttachments).toEqual([]);
+    });
+
+    it('adopts the first vanished-project card when several are present', async () => {
+      // Neither project exists, so both look like §5.2 row 3; position decides, and the loser
+      // is removed. Transient either way - planning recreates, and the next cycle matches the
+      // fresh card by id.
       const linear = fakeLinear({
         getStartedIssues: vi.fn().mockResolvedValue([issue()]),
         getMarkerAttachments: vi.fn().mockResolvedValue([moved, own]),
@@ -285,6 +356,58 @@ describe('discover', () => {
 
       expect(snapshot.mappings[0]?.attachment?.id).toBe('att-moved');
       expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-own']);
+    });
+  });
+
+  describe("a displaced card carrying an orphan's watermark (#1)", () => {
+    it('hands the orphan the card that was moved off its issue', async () => {
+      // B absorbed A. Linear moved A's card onto B, where it is a stray due for deletion -
+      // but it holds A's digest watermark, and A's project is now an orphan about to be
+      // archived. Capturing it here is what lets the closing comment report A's last day.
+      const pA = project({ id: 'proj-A', url: 'https://app.todoist.com/app/project/a-proj-A' });
+      const pB = project({ id: 'proj-B', url: 'https://app.todoist.com/app/project/b-proj-B' });
+      const aCard = attachment({
+        id: 'att-A',
+        url: pA.url,
+        metadata: { syncApp: 'linear-todoist-sync', lastDigestAt: '2026-09-19T07:00:00.000Z' },
+      });
+      const bCard = attachment({ id: 'att-B', url: pB.url });
+      // Identifiers must end in digits: that is what parseIssueIdentifierFromUrl matches on
+      // when reading a project's description back.
+      const B = issue({
+        id: 'issue-B',
+        identifier: 'ENG-2',
+        url: 'https://linear.app/x/issue/ENG-2/b',
+      });
+
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([B]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([aCard, bCard]),
+        getIssue: vi.fn().mockResolvedValue(issue({ stateType: 'duplicate' })),
+      });
+      const todoist = fakeTodoist({
+        getMarkedProjects: vi.fn().mockResolvedValue([
+          { ...pA, description: 'Linked Linear issue: https://linear.app/x/issue/ENG-1/a' },
+          { ...pB, description: 'Linked Linear issue: https://linear.app/x/issue/ENG-2/b' },
+        ]),
+      });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-A']);
+      const orphan = snapshot.orphans.find((o) => o.project.id === 'proj-A');
+      expect(orphan?.displacedCard?.id).toBe('att-A');
+    });
+
+    it('leaves displacedCard null for an ordinary orphan', async () => {
+      const linear = fakeLinear({
+        getIssue: vi.fn().mockResolvedValue(issue({ stateType: 'completed' })),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([project()]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.orphans[0]?.displacedCard).toBeNull();
     });
   });
 });

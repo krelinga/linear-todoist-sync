@@ -1,4 +1,4 @@
-import { parseLinkedIssueUrl } from '../naming.js';
+import { cardPointsAtProject, parseLinkedIssueUrl } from '../naming.js';
 import { withContext } from '../errors.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
@@ -29,18 +29,35 @@ function parseIssueIdentifierFromUrl(url: string): string | null {
  * the digest watermark, which lives in that card's metadata (§6.1) - keeping the stray instead
  * would abandon `lastDigestAt` and re-report everything already digested.
  *
- * With no matched project there is nothing to compare against, so the first card is kept and
- * the rest go. Whatever that leaves is transient: planning then calls for the project to be
- * recreated, and the following cycle matches the fresh card by URL.
+ * Matched on project **id** rather than by comparing URLs: a project URL embeds a slug of its
+ * name, the service renames projects on every issue title change, and a card's URL is never
+ * rewritten - so URLs diverge on the first rename. Comparing them would then find no match
+ * here, fall back to position, and delete the issue's own card as the stray.
+ *
+ * With no matched project, only a card whose project has genuinely vanished can be this
+ * issue's own - that is §5.2 row 3, the project deleted outright in Todoist, and it is what
+ * `recreate_project` exists for. A card pointing at a project that still exists somewhere
+ * (archived, and belonging to whichever issue this one absorbed) is a stray no matter what
+ * position it holds.
+ *
+ * Distinguishing those two matters because they are handled oppositely. Adopting a displaced
+ * card here made the reconciler announce "the previously linked project appears to have been
+ * deleted outright" on an issue whose project was alive and archived and had never been its
+ * own - a false statement, posted once and kept forever, on an issue that had simply absorbed
+ * a duplicate while sitting in the backlog.
  */
 function chooseCard(
   cards: LinearAttachmentSummary[],
   matchedProject: TodoistProjectSummary | null,
+  allProjects: TodoistProjectSummary[],
 ): { attachment: LinearAttachmentSummary | null; strayAttachments: LinearAttachmentSummary[] } {
-  const own = matchedProject
-    ? (cards.find((card) => card.url === matchedProject.url) ?? null)
-    : null;
-  const attachment = own ?? cards[0] ?? null;
+  const stillExists = (card: LinearAttachmentSummary): boolean =>
+    allProjects.some((project) => cardPointsAtProject(card.url, project.id));
+
+  const attachment = matchedProject
+    ? (cards.find((card) => cardPointsAtProject(card.url, matchedProject.id)) ?? null)
+    : (cards.find((card) => !stillExists(card)) ?? null);
+
   return {
     attachment,
     strayAttachments: cards.filter((card) => card.id !== attachment?.id),
@@ -94,10 +111,15 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
         },
         () => linear.getMarkerAttachments(issue.id),
       );
-      const { attachment, strayAttachments } = chooseCard(cards, matchedProject);
+      const { attachment, strayAttachments } = chooseCard(cards, matchedProject, projects);
       return { issue, matchedProject, attachment, strayAttachments };
     }),
   );
+
+  // A card displaced onto another issue is the only surviving copy of its project's digest
+  // watermark, and the same cycle deletes it as a stray. Cross-referencing here captures the
+  // metadata while it is still in hand, so the two actions need no ordering between them.
+  const displacedCards = mappings.flatMap((mapping) => mapping.strayAttachments);
 
   const orphanProjects = projects.filter((project) => !matchedProjectIds.has(project.id));
   const orphans: OrphanedProject[] = await Promise.all(
@@ -121,7 +143,9 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
             () => linear.getIssue(identifier),
           )
         : null;
-      return { project, linkedIssue };
+      const displacedCard =
+        displacedCards.find((card) => cardPointsAtProject(card.url, project.id)) ?? null;
+      return { project, linkedIssue, displacedCard };
     }),
   );
 
