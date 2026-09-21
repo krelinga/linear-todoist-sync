@@ -200,11 +200,24 @@ Runs once a day at a configurable local time (env var, default e.g. `07:00`), on
 For each active mapping (discovered per §5 — a Linear "started" issue with a matching marked Todoist project):
 
 1. Read `lastDigestAt` from the Linear attachment's metadata (§6.1).
-2. Query Todoist for tasks completed in this project with `completed_at > lastDigestAt`.
+2. Query Todoist's **activity log** for `task:completed` events in this project, keeping those after `lastDigestAt`.
 3. If none, skip — no comment posted, and no metadata write either (avoids noise on quiet days).
 4. Otherwise, group the completed tasks by Todoist section (section names come from the same in-memory, incrementally-synced Todoist state used for task counts in §5.4, so no extra API call is needed here), post a Linear comment on the issue, and write the new `lastDigestAt` back into the attachment's metadata via `attachmentUpdate` — ideally batched into the same mutation that also refreshes the outstanding-task-count subtitle, since both are just fields on one call.
 
-Because the watermark is read from Linear rather than a local table, a missed run (container down overnight) just picks up a bigger batch the next time it reads a stale `lastDigestAt` — nothing is silently dropped, and there's no separate recovery behavior to reason about.
+**The activity log, not the completed-tasks endpoint.** This is not interchangeable, and the difference is the entire content of a recurring task's history. **Completing a recurring task does not complete anything** — Todoist advances the due date and leaves the task open — so it never appears among completed tasks, and every digest silently omitted it. Verified against a live account: a one-off and a recurring task closed together, and `getCompletedTasksByCompletionDate` returned only the one-off while the activity log returned both, with the recurring task still present afterwards at `checked: false`.
+
+The activity log is a superset for this purpose — a `task:completed` event carries `content`, `eventDate`, and `extraData.sectionId` — so it replaces the completed-tasks query outright rather than supplementing it. Running both would mean deduplicating the one-off completions that appear in each, keyed on values that are only approximately equal.
+
+Two properties of that endpoint are load-bearing and neither is documented:
+
+- **`dateFrom` filters precisely only when given an ISO timestamp.** A `Date` object or a `YYYY-MM-DD` string truncates to day granularity, which would re-report everything an earlier digest already covered that same day. The client filters on `eventDate` regardless, so the watermark is honoured whatever the endpoint does with the parameter; sending the timestamp is an optimisation layered on that, not the correctness mechanism.
+- **A window older than the account's activity retention returns `403`, not an empty page.** Seven days on the free plan and longer on paid ones, so it cannot be hardcoded. The client answers a 403 by re-querying unbounded and filtering client-side, which returns whatever the plan does retain. The alternative — reporting nothing and advancing the watermark past it — loses the completions permanently.
+
+Retention is the one real regression against the old endpoint, which reached back three months: after an outage longer than the plan's window, completions that fell out of it are gone. The daily cadence makes the normal window about a day wide, so this only bites a service that has been down for a week or more, and it is the price of recording recurring completions at all.
+
+Because the watermark is read from Linear rather than a local table, a missed run (container down overnight) just picks up a bigger batch the next time it reads a stale `lastDigestAt` — nothing is silently dropped within the retention window, and there's no separate recovery behavior to reason about.
+
+A mapping with no watermark yet falls back to **7 days**. That bound used to be 89, sized to clear the old endpoint's 3-month span limit; with that endpoint gone the API no longer constrains it, so it is chosen for what makes a good first digest. Three months of history in a Linear comment is a wall of text about work whose context is long gone; a week is recognisable, and it happens to match the free plan's retention so the common case never exercises the 403 path.
 
 **Formatting:** tasks with no section are listed first, unlabeled; any sectioned tasks follow under a bold section-name label, in Todoist's own section order (not alphabetical) so the comment matches what you'd see in the app. A project that doesn't use sections at all ends up looking like a plain flat list — the structure only appears when it's actually there to help. Subtasks aren't a consideration: these Todoist projects aren't expected to use them, so every completed task is treated as top-level.
 
