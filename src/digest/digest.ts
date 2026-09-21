@@ -18,13 +18,18 @@ import type { IssueMapping } from '../types.js';
  * client handles by falling back to an unbounded query. So the API no longer constrains this
  * number at all, and it can be chosen for what makes a good first digest instead.
  *
- * Seven days is that choice. A first digest exists to say "here is what you finished recently",
- * and three months of history dumped into a Linear comment serves nobody - it is a wall of text
- * about work whose context is long gone. A week is recognisable. It also happens to sit at the
- * free plan's retention boundary, so the common case asks for exactly what is available and the
- * 403 path stays unexercised.
+ * About a week is that choice. A first digest exists to say "here is what you finished
+ * recently", and three months of history dumped into a Linear comment serves nobody - it is a
+ * wall of text about work whose context is long gone.
+ *
+ * Six rather than seven because the free plan's activity retention is exactly seven days, and
+ * asking for the boundary itself is outside it: probing a live account, six days back returns
+ * results and seven returns 403. Seven therefore 403'd on every first digest for a free
+ * account. The client's fallback now recovers from that correctly, but recovering needs a
+ * second request and logs a warning each time, so it is better not to trip it. A day of margin
+ * also absorbs the difference between a rolling cutoff and a calendar-day one.
  */
-const DEFAULT_LOOKBACK_DAYS = 7;
+const DEFAULT_LOOKBACK_DAYS = 6;
 
 function defaultDigestSince(): string {
   return new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();

@@ -75,11 +75,22 @@ function* causeChain(error: unknown): Generator<Record<string, unknown>> {
   }
 }
 
+/**
+ * The property names HTTP clients use for a response status, in no particular order of
+ * preference because no error carries two of them.
+ *
+ * `httpStatusCode` is the Todoist SDK's spelling (`TodoistRequestError`) and its absence here
+ * was silently disabling every status-dependent behaviour on that half of the service:
+ * §4.3's backoff never retried a Todoist 429 or 5xx, the `result="rate_limited"` metric could
+ * not fire, and the digest's 403 fallback for an over-long activity window was unreachable.
+ * Linear's `status` worked throughout, so the retry policy appeared to function.
+ */
+const STATUS_KEYS = ['status', 'statusCode', 'httpStatusCode'] as const;
+
 export function extractHttpStatus(error: unknown): number | undefined {
   for (const link of causeChain(error)) {
     const candidates = [
-      link['status'],
-      link['statusCode'],
+      ...STATUS_KEYS.map((key) => link[key]),
       (link as { response?: Record<string, unknown> }).response?.['status'],
     ];
     for (const candidate of candidates) {

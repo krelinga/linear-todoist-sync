@@ -263,6 +263,10 @@ export class TodoistClient implements TodoistPort {
    *   already covered by an earlier digest that same day. The client-side `eventDate` filter
    *   below is what actually guarantees the watermark is honoured; sending the timestamp is an
    *   optimisation on top of it, not the correctness mechanism.
+   * The log is also eventually consistent - a completion takes tens of seconds to become
+   * queryable, measured at around thirty. Irrelevant to a once-daily job, but it is what makes
+   * a hand-run digest immediately after completing a task come back empty.
+   *
    * - **Asking for a window older than the account's activity retention returns 403**, not an
    *   empty page - seven days on the free plan, longer on paid ones, so it cannot be hardcoded.
    *   A 403 therefore falls back to an unbounded query, which returns whatever the plan does

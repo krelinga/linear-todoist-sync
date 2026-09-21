@@ -260,9 +260,15 @@ describe('TodoistClient', () => {
     it("retries unbounded when the window predates the account's activity retention", async () => {
       // Todoist answers a too-old dateFrom with 403 rather than an empty page, and the cutoff
       // depends on the plan - so the window cannot be known ahead of time.
+      //
+      // `httpStatusCode` is TodoistRequestError's own spelling, and using anything else here
+      // makes this test pass over code that cannot run: the fallback reads the status back
+      // through extractHttpStatus, which did not recognise that key.
       const getActivityLogs = vi
         .fn()
-        .mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { status: 403 }))
+        .mockRejectedValueOnce(
+          Object.assign(new Error('HTTP 403: Forbidden'), { httpStatusCode: 403 }),
+        )
         .mockResolvedValueOnce({
           results: [
             {
