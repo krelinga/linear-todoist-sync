@@ -306,9 +306,47 @@ describe('discover', () => {
       expect(snapshot.mappings[0]?.strayAttachments).toEqual([]);
     });
 
-    it('falls back to the first card when there is no project to compare against', async () => {
-      // Nothing distinguishes them here; planning will recreate the project, and the next
-      // cycle matches the fresh card by URL.
+    it('does not adopt a displaced card when the project it names still exists', async () => {
+      // An issue sitting in the backlog absorbs a duplicate: Linear moves the duplicate's card
+      // onto it, and it has no project of its own. Adopting that card made planning announce
+      // "the previously linked project appears to have been deleted outright" - about a
+      // project that was alive, archived, and had never belonged to this issue.
+      const absorbed = project({ id: 'proj-dup', isArchived: true });
+      const displaced = attachment({ id: 'att-displaced', url: absorbed.url });
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([displaced]),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([absorbed]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.attachment).toBeNull();
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-displaced']);
+    });
+
+    it('does adopt a card whose project has genuinely vanished (§5.2 row 3)', async () => {
+      // The opposite case, and the reason the check is "does the project still exist" rather
+      // than "is there a matched project": here recreate_project is exactly right.
+      const gone = attachment({
+        id: 'att-gone',
+        url: 'https://todoist.com/showProject?id=deleted',
+      });
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([gone]),
+      });
+
+      const snapshot = await discover(linear, fakeTodoist());
+
+      expect(snapshot.mappings[0]?.attachment?.id).toBe('att-gone');
+      expect(snapshot.mappings[0]?.strayAttachments).toEqual([]);
+    });
+
+    it('adopts the first vanished-project card when several are present', async () => {
+      // Neither project exists, so both look like §5.2 row 3; position decides, and the loser
+      // is removed. Transient either way - planning recreates, and the next cycle matches the
+      // fresh card by id.
       const linear = fakeLinear({
         getStartedIssues: vi.fn().mockResolvedValue([issue()]),
         getMarkerAttachments: vi.fn().mockResolvedValue([moved, own]),

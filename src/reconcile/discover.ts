@@ -34,18 +34,30 @@ function parseIssueIdentifierFromUrl(url: string): string | null {
  * rewritten - so URLs diverge on the first rename. Comparing them would then find no match
  * here, fall back to position, and delete the issue's own card as the stray.
  *
- * With no matched project there is nothing to compare against, so the first card is kept and
- * the rest go. Whatever that leaves is transient: planning then calls for the project to be
- * recreated, and the following cycle matches the fresh card by URL.
+ * With no matched project, only a card whose project has genuinely vanished can be this
+ * issue's own - that is §5.2 row 3, the project deleted outright in Todoist, and it is what
+ * `recreate_project` exists for. A card pointing at a project that still exists somewhere
+ * (archived, and belonging to whichever issue this one absorbed) is a stray no matter what
+ * position it holds.
+ *
+ * Distinguishing those two matters because they are handled oppositely. Adopting a displaced
+ * card here made the reconciler announce "the previously linked project appears to have been
+ * deleted outright" on an issue whose project was alive and archived and had never been its
+ * own - a false statement, posted once and kept forever, on an issue that had simply absorbed
+ * a duplicate while sitting in the backlog.
  */
 function chooseCard(
   cards: LinearAttachmentSummary[],
   matchedProject: TodoistProjectSummary | null,
+  allProjects: TodoistProjectSummary[],
 ): { attachment: LinearAttachmentSummary | null; strayAttachments: LinearAttachmentSummary[] } {
-  const own = matchedProject
+  const stillExists = (card: LinearAttachmentSummary): boolean =>
+    allProjects.some((project) => cardPointsAtProject(card.url, project.id));
+
+  const attachment = matchedProject
     ? (cards.find((card) => cardPointsAtProject(card.url, matchedProject.id)) ?? null)
-    : null;
-  const attachment = own ?? cards[0] ?? null;
+    : (cards.find((card) => !stillExists(card)) ?? null);
+
   return {
     attachment,
     strayAttachments: cards.filter((card) => card.id !== attachment?.id),
@@ -99,7 +111,7 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
         },
         () => linear.getMarkerAttachments(issue.id),
       );
-      const { attachment, strayAttachments } = chooseCard(cards, matchedProject);
+      const { attachment, strayAttachments } = chooseCard(cards, matchedProject, projects);
       return { issue, matchedProject, attachment, strayAttachments };
     }),
   );

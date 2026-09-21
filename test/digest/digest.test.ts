@@ -229,10 +229,18 @@ describe('runDigestJob', () => {
     });
     const secondProject = project({
       id: 'proj-2',
+      url: 'https://todoist.com/showProject?id=proj-2',
       description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-2',
     });
     const linear = fakeLinear({
       getStartedIssues: vi.fn().mockResolvedValue([issue(), secondIssue]),
+      // Each issue holds the card for its *own* project: a card pointing somewhere else is a
+      // stray, not this issue's, so handing both issues the same card describes no real state.
+      getMarkerAttachments: vi
+        .fn()
+        .mockImplementation(async (issueId: string) => [
+          attachment(issueId === 'issue-2' ? { id: 'att-2', url: secondProject.url } : {}),
+        ]),
       createComment: vi
         .fn()
         .mockRejectedValueOnce(new Error('linear down'))
