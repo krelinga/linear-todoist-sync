@@ -134,9 +134,9 @@ describe('runDigestJob', () => {
   });
 
   it('falls back to a bounded lookback window, not the epoch, when no watermark has ever been recorded', async () => {
-    // The epoch is not a usable start point, and the bound is now a product decision rather
-    // than an API limit: a first digest should read as "what you finished recently", not three
-    // months of history nobody remembers the context for.
+    // The epoch is not a usable start point. The bound is a product decision - a first digest
+    // should read as "what you finished recently" - trimmed by one day so it lands inside the
+    // free plan's seven-day activity retention rather than on the boundary, which 403s.
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-08-10T00:00:00.000Z'));
@@ -147,7 +147,7 @@ describe('runDigestJob', () => {
 
       await runDigestJob({ linear, todoist, metrics });
 
-      expect(getCompletedTasksSince).toHaveBeenCalledWith('proj-1', '2026-08-03T00:00:00.000Z');
+      expect(getCompletedTasksSince).toHaveBeenCalledWith('proj-1', '2026-08-04T00:00:00.000Z');
     } finally {
       vi.useRealTimers();
     }
