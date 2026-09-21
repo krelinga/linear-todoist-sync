@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TodoistClient } from '../../src/clients/todoist.js';
-import type {
-  RawProject,
-  RawProjectPage,
-  RawTask,
-  TodoistSdkClient,
-} from '../../src/clients/todoist.js';
+import type { RawProject, RawProjectPage, TodoistSdkClient } from '../../src/clients/todoist.js';
 import { createMetrics } from '../../src/metrics.js';
 import { logger } from '../../src/logger.js';
 import { errorFields } from '../../src/errors.js';
@@ -38,7 +33,7 @@ function fakeSdk(overrides: Partial<TodoistSdkClient> = {}): TodoistSdkClient {
     archiveProject: vi.fn(),
     unarchiveProject: vi.fn(),
     getFullProject: vi.fn(),
-    getCompletedTasksByCompletionDate: vi.fn(),
+    getActivityLogs: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
     addComment: vi.fn(),
     ...overrides,
   };
@@ -172,26 +167,120 @@ describe('TodoistClient', () => {
 
   describe('getCompletedTasksSince', () => {
     it('paginates and maps completedAt to an ISO string', async () => {
-      const task: RawTask = {
-        id: 't1',
-        content: 'Done thing',
-        sectionId: null,
-        completedAt: new Date('2026-08-09T12:00:00.000Z'),
-      };
-      const getCompletedTasksByCompletionDate = vi
+      const event = (over: Record<string, unknown> = {}) => ({
+        objectId: 't1',
+        eventType: 'completed',
+        eventDate: '2026-08-09T12:00:00.000Z',
+        extraData: { content: 'Done thing' },
+        ...over,
+      });
+      const getActivityLogs = vi
         .fn()
-        .mockResolvedValueOnce({ items: [task], nextCursor: 'cursor-1' })
-        .mockResolvedValueOnce({ items: [], nextCursor: null });
-      const client = new TodoistClient(fakeSdk({ getCompletedTasksByCompletionDate }));
+        .mockResolvedValueOnce({ results: [event()], nextCursor: 'cursor-1' })
+        .mockResolvedValueOnce({ results: [], nextCursor: null });
+      const client = new TodoistClient(fakeSdk({ getActivityLogs }));
+
       const result = await client.getCompletedTasksSince('proj-1', '2026-08-01T00:00:00.000Z');
+
       expect(result).toEqual([
         { content: 'Done thing', completedAt: '2026-08-09T12:00:00.000Z', sectionId: null },
       ]);
-      expect(getCompletedTasksByCompletionDate).toHaveBeenCalledTimes(2);
-      expect(getCompletedTasksByCompletionDate.mock.calls[0]?.[0]).toMatchObject({
-        projectId: 'proj-1',
-        since: '2026-08-01T00:00:00.000Z',
+      expect(getActivityLogs).toHaveBeenCalledTimes(2);
+      expect(getActivityLogs.mock.calls[0]?.[0]).toMatchObject({
+        objectEventTypes: 'task:completed',
+        parentProjectId: 'proj-1',
+        dateFrom: '2026-08-01T00:00:00.000Z',
       });
+    });
+
+    it('reports a recurring completion, which the completed-tasks endpoint never returns', async () => {
+      // The whole bug: closing a recurring task reschedules it instead of completing it, so it
+      // only ever shows up as an activity event.
+      const getActivityLogs = vi.fn().mockResolvedValue({
+        results: [
+          {
+            objectId: 'r1',
+            eventType: 'completed',
+            eventDate: '2026-08-09T12:00:00.000Z',
+            extraData: { content: 'Water the plants', isRecurring: true, sectionId: 'sec-1' },
+          },
+        ],
+        nextCursor: null,
+      });
+      const client = new TodoistClient(fakeSdk({ getActivityLogs }));
+
+      expect(await client.getCompletedTasksSince('p', '2026-08-01T00:00:00.000Z')).toEqual([
+        {
+          content: 'Water the plants',
+          completedAt: '2026-08-09T12:00:00.000Z',
+          sectionId: 'sec-1',
+        },
+      ]);
+    });
+
+    it('drops events at or before the watermark, since dateFrom may only filter by day', async () => {
+      const at = (iso: string, content: string) => ({
+        objectId: content,
+        eventType: 'completed',
+        eventDate: iso,
+        extraData: { content },
+      });
+      const getActivityLogs = vi.fn().mockResolvedValue({
+        results: [
+          at('2026-08-09T08:00:00.000Z', 'earlier same day'),
+          at('2026-08-09T10:00:00.000Z', 'exactly the watermark'),
+          at('2026-08-09T11:00:00.000Z', 'after'),
+        ],
+        nextCursor: null,
+      });
+      const client = new TodoistClient(fakeSdk({ getActivityLogs }));
+
+      const result = await client.getCompletedTasksSince('p', '2026-08-09T10:00:00.000Z');
+
+      expect(result.map((t) => t.content)).toEqual(['after']);
+    });
+
+    it('ignores non-completion events that share the page', async () => {
+      const getActivityLogs = vi.fn().mockResolvedValue({
+        results: [
+          {
+            objectId: 'a',
+            eventType: 'added',
+            eventDate: '2026-08-09T12:00:00.000Z',
+            extraData: { content: 'Added, not completed' },
+          },
+        ],
+        nextCursor: null,
+      });
+      const client = new TodoistClient(fakeSdk({ getActivityLogs }));
+
+      expect(await client.getCompletedTasksSince('p', '2026-08-01T00:00:00.000Z')).toEqual([]);
+    });
+
+    it("retries unbounded when the window predates the account's activity retention", async () => {
+      // Todoist answers a too-old dateFrom with 403 rather than an empty page, and the cutoff
+      // depends on the plan - so the window cannot be known ahead of time.
+      const getActivityLogs = vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error('Forbidden'), { status: 403 }))
+        .mockResolvedValueOnce({
+          results: [
+            {
+              objectId: 't',
+              eventType: 'completed',
+              eventDate: '2026-08-09T12:00:00.000Z',
+              extraData: { content: 'Still reported' },
+            },
+          ],
+          nextCursor: null,
+        });
+      const client = new TodoistClient(fakeSdk({ getActivityLogs }));
+
+      const result = await client.getCompletedTasksSince('p', '2020-01-01T00:00:00.000Z');
+
+      expect(result.map((t) => t.content)).toEqual(['Still reported']);
+      expect(getActivityLogs.mock.calls[0]?.[0]).toHaveProperty('dateFrom');
+      expect(getActivityLogs.mock.calls[1]?.[0]).not.toHaveProperty('dateFrom');
     });
   });
 
@@ -252,12 +341,10 @@ describe('TodoistClient', () => {
       });
     });
 
-    it('names the date window when the completed-tasks query is rejected', async () => {
+    it('names the date window when the activity query is rejected', async () => {
       const client = new TodoistClient(
         fakeSdk({
-          getCompletedTasksByCompletionDate: vi
-            .fn()
-            .mockRejectedValue(new Error('completion date range must not exceed 3 months')),
+          getActivityLogs: vi.fn().mockRejectedValue(new Error('upstream exploded')),
         }),
       );
 
@@ -266,7 +353,7 @@ describe('TodoistClient', () => {
         .catch((e: unknown) => e);
 
       expect(errorFields(err)).toMatchObject({
-        operation: 'getCompletedTasksByCompletionDate',
+        operation: 'getActivityLogs',
         projectId: 'proj-1',
         since: '2020-01-01T00:00:00.000Z',
       });

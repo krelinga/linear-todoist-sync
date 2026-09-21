@@ -42,8 +42,20 @@ export interface RawProjectPage {
   nextCursor: string | null;
 }
 
-export interface RawCompletedTaskPage {
-  items: RawTask[];
+/**
+ * One entry from Todoist's activity log. `extraData` is a loose bag whose keys depend on the
+ * event and on which of the task's fields were set - `sectionId` is present only when the task
+ * is in a section, so its absence means "unsectioned" rather than "unknown".
+ */
+export interface RawActivityEvent {
+  objectId: string;
+  eventType: string;
+  eventDate: Date | string;
+  extraData?: Record<string, unknown> | null;
+}
+
+export interface RawActivityPage {
+  results: RawActivityEvent[];
   nextCursor: string | null;
 }
 
@@ -60,12 +72,12 @@ export interface TodoistSdkClient {
   archiveProject(id: string): Promise<RawProject>;
   unarchiveProject(id: string): Promise<RawProject>;
   getFullProject(id: string): Promise<RawFullProject>;
-  getCompletedTasksByCompletionDate(args: {
-    projectId: string;
-    since: string;
-    until: string;
+  getActivityLogs(args: {
+    objectEventTypes?: CompletedTaskEvent;
+    parentProjectId?: string;
+    dateFrom?: string;
     cursor?: string | null;
-  }): Promise<RawCompletedTaskPage>;
+  }): Promise<RawActivityPage>;
   addComment(args: { projectId: string; content: string }): Promise<unknown>;
 }
 
@@ -101,6 +113,19 @@ function toTaskSummary(task: RawTask): TodoistTaskSummary {
 
 function toSectionSummary(section: RawSection): TodoistSectionSummary {
   return { id: section.id, name: section.name, order: section.sectionOrder };
+}
+
+/**
+ * The single activity event the digest cares about. Typed as a literal rather than `string`
+ * so this interface stays structurally satisfiable by the real `TodoistApi`, whose
+ * `objectEventTypes` is a template-literal union that plain `string` does not fit.
+ */
+const COMPLETED_TASK_EVENT = 'task:completed';
+type CompletedTaskEvent = typeof COMPLETED_TASK_EVENT;
+
+/** `extraData.sectionId` is omitted entirely for an unsectioned task, so absent means null. */
+function toSectionId(raw: unknown): string | null {
+  return typeof raw === 'string' && raw !== '' ? raw : null;
 }
 
 /** Keeps log lines scannable when a comment body is long. */
@@ -220,36 +245,88 @@ export class TodoistClient implements TodoistPort {
     };
   }
 
+  /**
+   * Completions reported to the digest (§7), sourced from Todoist's **activity log** rather
+   * than its completed-tasks endpoint.
+   *
+   * Completing a recurring task does not complete anything: Todoist advances the due date and
+   * leaves the task open, so it never appears in `getCompletedTasksByCompletionDate` and its
+   * completions were silently missing from every digest (#2, verified against a live account -
+   * a one-off and a recurring task completed together, and only the one-off came back). The
+   * activity log records a `task:completed` event either way, and carries `content`,
+   * `eventDate` and `extraData.sectionId`, which is everything the digest formats with.
+   *
+   * Two properties of this endpoint are load-bearing and neither is documented:
+   *
+   * - **`dateFrom` only filters precisely when given an ISO timestamp.** A `Date` object or a
+   *   `YYYY-MM-DD` string truncates to day granularity, which would re-report everything
+   *   already covered by an earlier digest that same day. The client-side `eventDate` filter
+   *   below is what actually guarantees the watermark is honoured; sending the timestamp is an
+   *   optimisation on top of it, not the correctness mechanism.
+   * - **Asking for a window older than the account's activity retention returns 403**, not an
+   *   empty page - seven days on the free plan, longer on paid ones, so it cannot be hardcoded.
+   *   A 403 therefore falls back to an unbounded query, which returns whatever the plan does
+   *   retain and is then filtered client-side. Worse than failing the digest would be reporting
+   *   nothing and advancing the watermark past it.
+   */
   async getCompletedTasksSince(
     projectId: string,
     sinceIso: string,
   ): Promise<TodoistCompletedTaskSummary[]> {
-    const untilIso = new Date().toISOString();
-    const completed: RawTask[] = [];
+    const events = await this.fetchCompletionEvents(projectId, sinceIso);
+    return events
+      .map((event) => ({
+        content: String(event.extraData?.['content'] ?? ''),
+        completedAt: new Date(event.eventDate).toISOString(),
+        sectionId: toSectionId(event.extraData?.['sectionId']),
+      }))
+      .filter((task) => task.content !== '' && task.completedAt > sinceIso);
+  }
+
+  private async fetchCompletionEvents(
+    projectId: string,
+    sinceIso: string,
+  ): Promise<RawActivityEvent[]> {
+    try {
+      return await this.fetchActivityPages(projectId, sinceIso);
+    } catch (err) {
+      if (extractHttpStatus(err) !== 403) {
+        throw err;
+      }
+      logger.warn("Activity window predates this account's retention; querying unbounded", {
+        system: 'todoist',
+        projectId,
+        since: sinceIso,
+      });
+      return this.fetchActivityPages(projectId, undefined);
+    }
+  }
+
+  private async fetchActivityPages(
+    projectId: string,
+    sinceIso: string | undefined,
+  ): Promise<RawActivityEvent[]> {
+    const events: RawActivityEvent[] = [];
     let cursor: string | null = null;
     for (;;) {
-      const page: RawCompletedTaskPage = await this.call(
-        'getCompletedTasksByCompletionDate',
-        { projectId, since: sinceIso, until: untilIso, cursor },
+      const page: RawActivityPage = await this.call(
+        'getActivityLogs',
+        { projectId, since: sinceIso ?? '(unbounded)', cursor },
         () =>
-          this.sdk.getCompletedTasksByCompletionDate({
-            projectId,
-            since: sinceIso,
-            until: untilIso,
+          this.sdk.getActivityLogs({
+            objectEventTypes: COMPLETED_TASK_EVENT,
+            parentProjectId: projectId,
+            ...(sinceIso === undefined ? {} : { dateFrom: sinceIso }),
             cursor,
           }),
       );
-      completed.push(...page.items);
+      events.push(...page.results.filter((e) => e.eventType === 'completed'));
       if (!page.nextCursor) {
         break;
       }
       cursor = page.nextCursor;
     }
-    return completed.map((task) => ({
-      content: task.content,
-      completedAt: (task.completedAt ?? new Date(0)).toISOString(),
-      sectionId: task.sectionId,
-    }));
+    return events;
   }
 
   async addProjectComment(projectId: string, content: string): Promise<void> {
