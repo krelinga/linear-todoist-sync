@@ -9,14 +9,22 @@ import type { Metrics } from '../metrics.js';
 import type { IssueMapping } from '../types.js';
 
 /**
- * Todoist's completed-tasks-by-completion-date endpoint rejects any since/until span over 3
- * months (error_code 20, "completion date range must not exceed 3 months"). A mapping with no
- * lastDigestAt watermark yet (i.e. it's never had a successful digest) needs *some* fallback
- * start point, but the true epoch would 400 on every call - and since that call throws before
- * the watermark can ever be written, it would fail identically forever, not just once. 89 days
- * stays safely under the 3-month limit regardless of month lengths.
+ * A mapping with no `lastDigestAt` watermark yet - one that has never had a successful digest -
+ * needs *some* start point, and the true epoch is not it.
+ *
+ * This was 89 days, sized to stay under the completed-tasks endpoint's 3-month span limit. That
+ * endpoint is gone (#2): completions now come from the activity log, whose own limit is
+ * retention rather than span, is plan-dependent, and answers an over-long window with a 403 the
+ * client handles by falling back to an unbounded query. So the API no longer constrains this
+ * number at all, and it can be chosen for what makes a good first digest instead.
+ *
+ * Seven days is that choice. A first digest exists to say "here is what you finished recently",
+ * and three months of history dumped into a Linear comment serves nobody - it is a wall of text
+ * about work whose context is long gone. A week is recognisable. It also happens to sit at the
+ * free plan's retention boundary, so the common case asks for exactly what is available and the
+ * 403 path stays unexercised.
  */
-const DEFAULT_LOOKBACK_DAYS = 89;
+const DEFAULT_LOOKBACK_DAYS = 7;
 
 function defaultDigestSince(): string {
   return new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();

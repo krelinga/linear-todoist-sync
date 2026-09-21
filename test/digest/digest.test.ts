@@ -133,9 +133,9 @@ describe('runDigestJob', () => {
   });
 
   it('falls back to a bounded lookback window, not the epoch, when no watermark has ever been recorded', async () => {
-    // Todoist's completed-tasks-by-completion-date endpoint rejects since/until spans over 3
-    // months - falling back to the true epoch would 400 on every call, forever, since that
-    // failure blocks the watermark from ever being written.
+    // The epoch is not a usable start point, and the bound is now a product decision rather
+    // than an API limit: a first digest should read as "what you finished recently", not three
+    // months of history nobody remembers the context for.
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-08-10T00:00:00.000Z'));
@@ -146,7 +146,7 @@ describe('runDigestJob', () => {
 
       await runDigestJob({ linear, todoist, metrics });
 
-      expect(getCompletedTasksSince).toHaveBeenCalledWith('proj-1', '2026-05-13T00:00:00.000Z');
+      expect(getCompletedTasksSince).toHaveBeenCalledWith('proj-1', '2026-08-03T00:00:00.000Z');
     } finally {
       vi.useRealTimers();
     }
