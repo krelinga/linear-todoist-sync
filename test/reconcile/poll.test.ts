@@ -54,7 +54,11 @@ function fakeTodoist(overrides: Partial<TodoistPort> = {}): TodoistPort {
   };
 }
 
-async function gaugeValue(metrics: ReturnType<typeof createMetrics>, name: string, labels: Record<string, string>) {
+async function gaugeValue(
+  metrics: ReturnType<typeof createMetrics>,
+  name: string,
+  labels: Record<string, string>,
+) {
   const values = (await metrics.registry.getSingleMetric(name)?.get())?.values ?? [];
   return values.find((v) => Object.entries(labels).every(([k, val]) => v.labels[k] === val))?.value;
 }
@@ -87,7 +91,11 @@ describe('runPollCycle', () => {
     expect(await gaugeValue(metrics, 'sync_last_poll_result', {})).toBe(1);
     expect(await gaugeValue(metrics, 'sync_mappings', { status: 'active' })).toBe(1);
     expect(await gaugeValue(metrics, 'sync_mappings', { status: 'archived' })).toBe(1);
-    const successTimestamp = await gaugeValue(metrics, 'sync_last_poll_success_timestamp_seconds', {});
+    const successTimestamp = await gaugeValue(
+      metrics,
+      'sync_last_poll_success_timestamp_seconds',
+      {},
+    );
     expect(successTimestamp).toBeGreaterThan(0);
     const runs = (await metrics.pollRunsTotal.get()).values;
     expect(runs).toEqual(
@@ -122,7 +130,10 @@ describe('runPollCycle', () => {
     await runPollCycle({ linear, todoist, metrics });
 
     expect(await gaugeValue(metrics, 'sync_last_poll_result', {})).toBe(0);
-    expect(await gaugeValue(metrics, 'sync_last_poll_success_timestamp_seconds', {})).toBe(0);
+    // Absent rather than 0 until a cycle succeeds - see metrics.ts.
+    expect(
+      await gaugeValue(metrics, 'sync_last_poll_success_timestamp_seconds', {}),
+    ).toBeUndefined();
     const runs = (await metrics.pollRunsTotal.get()).values;
     expect(runs).toEqual(
       expect.arrayContaining([

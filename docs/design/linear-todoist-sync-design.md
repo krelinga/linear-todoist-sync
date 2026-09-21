@@ -231,10 +231,18 @@ To let the rest of the homelab keep an eye on this without checking logs, the se
 
 | Metric | Type | Meaning |
 |---|---|---|
-| `sync_last_poll_success_timestamp_seconds` | gauge | Unix time of the last poll that completed without error. Its age is the best "is this stuck" signal. |
-| `sync_last_poll_result` | gauge | `1` = last poll succeeded, `0` = failed |
-| `sync_last_digest_run_timestamp_seconds` | gauge | Unix time of the last completed digest run |
-| `sync_last_digest_result` | gauge | `1` = last digest run succeeded, `0` = failed |
+| `sync_last_poll_success_timestamp_seconds` | gauge | Unix time of the last poll that completed without error. Its age is the best "is this stuck" signal. **Absent until one has.** |
+| `sync_last_poll_result` | gauge | `1` = last poll succeeded, `0` = failed. **Absent until one has run.** |
+| `sync_last_digest_run_timestamp_seconds` | gauge | Unix time of the last completed digest run. **Absent until one has completed.** |
+| `sync_last_digest_result` | gauge | `1` = last digest run succeeded, `0` = failed. **Absent until one has run.** |
+
+**Why these four report nothing rather than a starting value.** `prom-client` seeds an unlabelled gauge with `0` and exports it from the first scrape, before the event it describes has happened. For a timestamp read as `time() - gauge` that makes the difference the whole Unix epoch — roughly 56 years of apparent staleness, which trips any alert built on it; for a result gauge, `0` is defined as *failed*, so the default asserts a failure that never occurred. The digest pair is where it bites in practice, because the digest runs once a day and the window can be most of a day wide (§7).
+
+Every placeholder is a lie of some kind, so these report no sample at all until something real writes to them. `HELP` and `TYPE` remain, so the metrics stay declared and discoverable while unset.
+
+**This makes no-data handling the consumer's job, and that is the point.** A dashboard or alert that carries the last observed value across a gap gets behaviour strictly better than any placeholder could provide: staleness accumulates from the last genuine event rather than restarting with the process, so a service that restarts more often than the interval being watched can no longer hide a digest that never runs. Seeding with process start would have looked tidier and bought exactly that blind spot. The obligation this creates is real, though — a consumer that treats no-data as zero reproduces the original bug, and one that drops the series silently will not alert at all.
+
+The two gauge kinds are a pair and should not be collapsed: the result gauge answers *did the most recent attempt fail*, and once populated it cannot see a scheduler that never fires again — it holds its last success forever. The timestamp's staleness answers *how long since one succeeded*, which is what catches that.
 
 **Volume / throughput:**
 
