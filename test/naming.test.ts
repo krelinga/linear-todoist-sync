@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ATTACHMENT_SCHEMA_VERSION,
+  cardPointsAtProject,
   buildArchivedSubtitle,
   buildAttachmentMetadata,
   buildOutstandingSubtitle,
@@ -65,7 +66,10 @@ describe('isLostProject / markAsLost', () => {
 describe('buildAttachmentMetadata / isMarkerAttachment / getLastDigestAt', () => {
   it('builds metadata recognized as a marker attachment', () => {
     const metadata = buildAttachmentMetadata();
-    expect(metadata).toEqual({ syncApp: SYNC_APP_MARKER, schemaVersion: ATTACHMENT_SCHEMA_VERSION });
+    expect(metadata).toEqual({
+      syncApp: SYNC_APP_MARKER,
+      schemaVersion: ATTACHMENT_SCHEMA_VERSION,
+    });
     expect(isMarkerAttachment(metadata)).toBe(true);
   });
 
@@ -105,5 +109,52 @@ describe('buildArchivedSubtitle', () => {
     [3, 'Archived — 3 tasks were outstanding'],
   ])('formats %i as %s', (count, expected) => {
     expect(buildArchivedSubtitle(count)).toBe(expected);
+  });
+});
+
+describe('cardPointsAtProject', () => {
+  const ID = '6hXgVG6qPG6Mwwmq';
+
+  it('matches a modern project URL', () => {
+    expect(
+      cardPointsAtProject(`https://app.todoist.com/app/project/eng-1-fix-the-thing-${ID}`, ID),
+    ).toBe(true);
+  });
+
+  it('still matches after the project is renamed', () => {
+    // The slug changes on rename, the id does not, and a card's URL is written once at
+    // creation and never rewritten.
+    const atCreation = `https://app.todoist.com/app/project/eng-1-original-title-${ID}`;
+    expect(cardPointsAtProject(atCreation, ID)).toBe(true);
+  });
+
+  it('matches a slug-less URL', () => {
+    expect(cardPointsAtProject(`https://app.todoist.com/app/project/${ID}`, ID)).toBe(true);
+  });
+
+  it('matches an id that itself contains hyphens', () => {
+    // Nothing in the URL says which hyphen separates slug from id, which is why this compares
+    // against a known id rather than trying to parse one out.
+    expect(
+      cardPointsAtProject('https://app.todoist.com/app/project/some-slug-proj-1', 'proj-1'),
+    ).toBe(true);
+  });
+
+  it("understands Todoist's older showProject form", () => {
+    expect(cardPointsAtProject('https://todoist.com/showProject?id=2203306141', '2203306141')).toBe(
+      true,
+    );
+  });
+
+  it('does not match a different project', () => {
+    expect(
+      cardPointsAtProject(`https://app.todoist.com/app/project/other-project-${ID}x`, ID),
+    ).toBe(false);
+    expect(cardPointsAtProject('https://todoist.com/showProject?id=999', '111')).toBe(false);
+  });
+
+  it('does not match a URL that names no project', () => {
+    expect(cardPointsAtProject('https://app.todoist.com/app/today', ID)).toBe(false);
+    expect(cardPointsAtProject('', ID)).toBe(false);
   });
 });

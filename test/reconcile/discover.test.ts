@@ -261,6 +261,31 @@ describe('discover', () => {
       expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-moved']);
     });
 
+    it("keeps the issue's own card even after the project was renamed", async () => {
+      // A project URL embeds a slug of its name and the service renames projects on every
+      // title change, but a card's URL is written once at creation. Comparing URLs would find
+      // no match here, fall back to position, and delete the issue's own card as the stray -
+      // with the moved card listed first, that is exactly backwards.
+      const renamed = project({
+        id: 'proj-1',
+        url: 'https://app.todoist.com/app/project/eng-1-a-brand-new-title-proj-1',
+      });
+      const ownWithStaleUrl = attachment({
+        id: 'att-own',
+        url: 'https://app.todoist.com/app/project/eng-1-the-original-title-proj-1',
+      });
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([moved, ownWithStaleUrl]),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([renamed]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.attachment?.id).toBe('att-own');
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-moved']);
+    });
+
     it('reports no strays when the only card is the right one', async () => {
       const linear = fakeLinear({
         getStartedIssues: vi.fn().mockResolvedValue([issue()]),

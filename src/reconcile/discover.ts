@@ -1,4 +1,4 @@
-import { parseLinkedIssueUrl } from '../naming.js';
+import { cardPointsAtProject, parseLinkedIssueUrl } from '../naming.js';
 import { withContext } from '../errors.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
@@ -29,6 +29,11 @@ function parseIssueIdentifierFromUrl(url: string): string | null {
  * the digest watermark, which lives in that card's metadata (§6.1) - keeping the stray instead
  * would abandon `lastDigestAt` and re-report everything already digested.
  *
+ * Matched on project **id** rather than by comparing URLs: a project URL embeds a slug of its
+ * name, the service renames projects on every issue title change, and a card's URL is never
+ * rewritten - so URLs diverge on the first rename. Comparing them would then find no match
+ * here, fall back to position, and delete the issue's own card as the stray.
+ *
  * With no matched project there is nothing to compare against, so the first card is kept and
  * the rest go. Whatever that leaves is transient: planning then calls for the project to be
  * recreated, and the following cycle matches the fresh card by URL.
@@ -38,7 +43,7 @@ function chooseCard(
   matchedProject: TodoistProjectSummary | null,
 ): { attachment: LinearAttachmentSummary | null; strayAttachments: LinearAttachmentSummary[] } {
   const own = matchedProject
-    ? (cards.find((card) => card.url === matchedProject.url) ?? null)
+    ? (cards.find((card) => cardPointsAtProject(card.url, matchedProject.id)) ?? null)
     : null;
   const attachment = own ?? cards[0] ?? null;
   return {
