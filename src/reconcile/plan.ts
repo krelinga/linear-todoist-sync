@@ -65,7 +65,7 @@ function planForMapping(mapping: Snapshot['mappings'][number]): Action[] {
 }
 
 function planForOrphan(orphan: Snapshot['orphans'][number]): Action | null {
-  const { project, linkedIssue } = orphan;
+  const { project, linkedIssue, displacedCard } = orphan;
 
   // §5.1: "once a project's name already carries [LOST], later polls skip it."
   if (isLostProject(project.name)) {
@@ -79,7 +79,7 @@ function planForOrphan(orphan: Snapshot['orphans'][number]): Action | null {
 
   if (!project.isArchived) {
     // §5.1 "issue moves to another state": archive, leaving tasks untouched.
-    return { kind: 'archive_project', project, linkedIssueId: linkedIssue.id };
+    return { kind: 'archive_project', project, linkedIssueId: linkedIssue.id, displacedCard };
   }
 
   // Already archived and its issue isn't started - correctly reflects reality, nothing to do.

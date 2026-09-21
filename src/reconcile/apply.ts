@@ -1,9 +1,12 @@
+import { defaultDigestSince } from '../digest/window.js';
+import { formatClosingComment } from '../digest/format.js';
 import {
   buildArchivedSubtitle,
   buildAttachmentMetadata,
   buildOutstandingSubtitle,
   buildProjectDescription,
   buildProjectName,
+  getLastDigestAt,
   markAsLost,
   TODOIST_ICON_URL,
 } from '../naming.js';
@@ -16,7 +19,10 @@ import type {
   Action,
   LinearAttachmentSummary,
   LinearIssueSummary,
+  TodoistCompletedTaskSummary,
   TodoistProjectSummary,
+  TodoistSectionSummary,
+  TodoistTaskSummary,
 } from '../types.js';
 
 export type ApplyDeps = {
@@ -111,7 +117,7 @@ async function applyAction(action: Action, deps: ApplyDeps): Promise<void> {
       return;
 
     case 'archive_project':
-      await archiveProject(action.project, action.linkedIssueId, deps);
+      await archiveProject(action.project, action.linkedIssueId, action.displacedCard, deps);
       return;
 
     case 'mark_lost':
@@ -222,12 +228,34 @@ async function deleteStrayCards(
   }
 }
 
+/**
+ * Closes out a mapping: report what happened to it, then archive the project (§5.6).
+ *
+ * Two things are otherwise lost at this moment. The digest only walks *started* issues, so
+ * completions between the last daily run and the issue leaving "started" are never reported -
+ * and that final day is the one worth having. Outstanding tasks are archived with the project
+ * rather than moved, so unless they are named here they simply vanish from view.
+ *
+ * Order is gather, archive, then comment. The archive is the state change that makes this
+ * action a no-op next cycle, so committing it first means a failed comment costs the record
+ * rather than producing a second copy of it on every retry - the same trade `recreate_project`
+ * already makes.
+ */
 async function archiveProject(
   project: TodoistProjectSummary,
   linkedIssueId: string,
+  displacedCard: LinearAttachmentSummary | null,
   deps: ApplyDeps,
 ): Promise<void> {
-  const { tasks } = await deps.todoist.getOutstandingTasks(project.id);
+  const { tasks, sections } = await deps.todoist.getOutstandingTasks(project.id);
+
+  // The card may have been moved off this issue onto whichever issue absorbed it (§5.5), in
+  // which case discovery captured it before the same cycle deleted it.
+  const [ownCard] = await deps.linear.getMarkerAttachments(linkedIssueId);
+  const card = ownCard ?? displacedCard;
+  const since = (card && getLastDigestAt(card.metadata)) ?? defaultDigestSince();
+  const completedTasks = await deps.todoist.getCompletedTasksSince(project.id, since);
+
   if (tasks.length > 0) {
     const list = tasks.map((task) => `- ${task.content}`).join('\n');
     await deps.todoist.addProjectComment(
@@ -240,13 +268,57 @@ async function archiveProject(
   await deps.todoist.archiveProject(project.id);
   deps.metrics.reconcileActionsTotal.inc({ action: 'project_archived' });
 
-  const [attachment] = await deps.linear.getMarkerAttachments(linkedIssueId);
-  if (attachment) {
-    await deps.linear.updateAttachment(attachment.id, {
-      title: attachment.title,
+  if (ownCard) {
+    await deps.linear.updateAttachment(ownCard.id, {
+      title: ownCard.title,
       subtitle: buildArchivedSubtitle(tasks.length),
-      metadata: attachment.metadata,
+      metadata: ownCard.metadata,
     });
     deps.metrics.reconcileActionsTotal.inc({ action: 'card_updated' });
   }
+
+  await postClosingComments(project, linkedIssueId, tasks, completedTasks, sections, deps);
+}
+
+/**
+ * Posts the closing record to the issue being closed out and, when it was absorbed as a
+ * duplicate, to the issue that absorbed it - each phrased from its own side.
+ *
+ * Both sides need it for different reasons. The duplicate is where someone looks for the
+ * history of work they did; the canonical issue is where the work continues, and it is the
+ * side that has no other way to learn that an archived project full of unfinished tasks exists
+ * at all, since Linear moves the card across without a word about what is behind it.
+ */
+async function postClosingComments(
+  project: TodoistProjectSummary,
+  linkedIssueId: string,
+  outstandingTasks: TodoistTaskSummary[],
+  completedTasks: TodoistCompletedTaskSummary[],
+  sections: TodoistSectionSummary[],
+  deps: ApplyDeps,
+): Promise<void> {
+  const absorbedBy = await deps.linear.getDuplicateOf(linkedIssueId);
+  const base = {
+    projectName: project.name,
+    projectUrl: project.url,
+    completedTasks,
+    outstandingTasks,
+    sections,
+  };
+
+  await deps.linear.createComment(
+    linkedIssueId,
+    formatClosingComment({ ...base, absorbedInto: absorbedBy?.identifier }),
+  );
+  deps.metrics.reconcileActionsTotal.inc({ action: 'closing_comment_posted' });
+
+  if (!absorbedBy) {
+    return;
+  }
+  const absorbedFrom = await deps.linear.getIssue(linkedIssueId);
+  await deps.linear.createComment(
+    absorbedBy.id,
+    formatClosingComment({ ...base, absorbedFrom: absorbedFrom?.identifier ?? 'a duplicate' }),
+  );
+  deps.metrics.reconcileActionsTotal.inc({ action: 'closing_comment_posted' });
 }

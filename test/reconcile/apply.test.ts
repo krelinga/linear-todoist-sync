@@ -60,6 +60,7 @@ function fakeLinear(overrides: Partial<LinearPort> = {}): LinearPort {
     getStartedIssues: vi.fn().mockResolvedValue([]),
     getIssue: vi.fn().mockResolvedValue(null),
     getMarkerAttachments: vi.fn().mockResolvedValue([]),
+    getDuplicateOf: vi.fn().mockResolvedValue(null),
     createAttachment: vi.fn().mockResolvedValue(attachment()),
     updateAttachment: vi.fn().mockResolvedValue(undefined),
     deleteAttachment: vi.fn().mockResolvedValue(undefined),
@@ -278,6 +279,7 @@ describe('applyActions', () => {
       });
       expect(await actionCounts(metrics)).toEqual({
         comment_posted: 1,
+        closing_comment_posted: 1,
         project_archived: 1,
         card_updated: 1,
       });
@@ -296,7 +298,11 @@ describe('applyActions', () => {
       await applyActions(actions, { linear, todoist, metrics });
 
       expect(todoist.addProjectComment).not.toHaveBeenCalled();
-      expect(await actionCounts(metrics)).toEqual({ project_archived: 1, card_updated: 1 });
+      expect(await actionCounts(metrics)).toEqual({
+        closing_comment_posted: 1,
+        project_archived: 1,
+        card_updated: 1,
+      });
     });
 
     it('skips freezing the card when no attachment is found', async () => {
@@ -310,7 +316,10 @@ describe('applyActions', () => {
       await applyActions(actions, { linear, todoist, metrics });
 
       expect(linear.updateAttachment).not.toHaveBeenCalled();
-      expect(await actionCounts(metrics)).toEqual({ project_archived: 1 });
+      expect(await actionCounts(metrics)).toEqual({
+        closing_comment_posted: 1,
+        project_archived: 1,
+      });
     });
   });
 
@@ -438,6 +447,99 @@ describe('applyActions', () => {
 
       expect(todoist.archiveProject).not.toHaveBeenCalled();
       expect(todoist.updateProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('closing comment on archive (§5.6)', () => {
+    const archive = (over: Record<string, unknown> = {}): Action => ({
+      kind: 'archive_project',
+      project: project(),
+      linkedIssueId: 'issue-1',
+      displacedCard: null,
+      ...over,
+    });
+
+    it('reports the final unreported completions, which no digest ever covers', async () => {
+      // The digest only walks started issues, so completions between the last daily run and
+      // the issue leaving "started" are reported nowhere else.
+      const linear = fakeLinear();
+      const todoist = fakeTodoist({
+        getOutstandingTasks: vi.fn().mockResolvedValue({ tasks: [], sections: [] }),
+        getCompletedTasksSince: vi.fn().mockResolvedValue([
+          {
+            content: 'Finished on the last day',
+            completedAt: '2026-09-01T00:00:00.000Z',
+            sectionId: null,
+          },
+        ]),
+      });
+
+      await applyActions([archive()], { linear, todoist, metrics: createMetrics() });
+
+      const body = vi.mocked(linear.createComment).mock.calls[0]?.[1] ?? '';
+      expect(body).toContain('Finished on the last day');
+      expect(vi.mocked(linear.createComment).mock.calls[0]?.[0]).toBe('issue-1');
+    });
+
+    it('names the outstanding tasks that are about to disappear into the archive', async () => {
+      const linear = fakeLinear();
+      const todoist = fakeTodoist({
+        getOutstandingTasks: vi
+          .fn()
+          .mockResolvedValue({ tasks: [task({ content: 'Never finished' })], sections: [] }),
+      });
+
+      await applyActions([archive()], { linear, todoist, metrics: createMetrics() });
+
+      expect(vi.mocked(linear.createComment).mock.calls[0]?.[1]).toContain('Never finished');
+    });
+
+    it('comments on both sides when the issue was absorbed as a duplicate', async () => {
+      const linear = fakeLinear({
+        getDuplicateOf: vi.fn().mockResolvedValue(issue({ id: 'issue-9', identifier: 'ENG-9' })),
+        getIssue: vi.fn().mockResolvedValue(issue({ identifier: 'ENG-1' })),
+      });
+
+      await applyActions([archive()], { linear, todoist: fakeTodoist(), metrics: createMetrics() });
+
+      const calls = vi.mocked(linear.createComment).mock.calls;
+      expect(calls.map((c) => c[0])).toEqual(['issue-1', 'issue-9']);
+      expect(calls[0]?.[1]).toContain('marked a duplicate of ENG-9');
+      expect(calls[1]?.[1]).toContain('absorbed from ENG-1');
+      expect(calls[1]?.[1]).toContain('not moved here');
+    });
+
+    it("uses the displaced card's watermark when the issue no longer holds its own", async () => {
+      // Linear moved the card to the issue that absorbed this one, and the same cycle deletes
+      // it - the watermark survives only because discovery captured it.
+      const linear = fakeLinear({ getMarkerAttachments: vi.fn().mockResolvedValue([]) });
+      const getCompletedTasksSince = vi.fn().mockResolvedValue([]);
+      const todoist = fakeTodoist({ getCompletedTasksSince });
+      const displacedCard = attachment({
+        metadata: { syncApp: 'linear-todoist-sync', lastDigestAt: '2026-09-19T07:00:00.000Z' },
+      });
+
+      await applyActions([archive({ displacedCard })], {
+        linear,
+        todoist,
+        metrics: createMetrics(),
+      });
+
+      expect(getCompletedTasksSince).toHaveBeenCalledWith(project().id, '2026-09-19T07:00:00.000Z');
+    });
+
+    it('archives before commenting, so a failed comment cannot duplicate itself', async () => {
+      const order: string[] = [];
+      const todoist = fakeTodoist({
+        archiveProject: vi.fn().mockImplementation(async () => void order.push('archive')),
+      });
+      const linear = fakeLinear({
+        createComment: vi.fn().mockImplementation(async () => void order.push('comment')),
+      });
+
+      await applyActions([archive()], { linear, todoist, metrics: createMetrics() });
+
+      expect(order).toEqual(['archive', 'comment']);
     });
   });
 });

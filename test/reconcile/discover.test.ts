@@ -138,7 +138,11 @@ describe('discover', () => {
     const snapshot = await discover(linear, todoist);
 
     expect(snapshot.orphans).toEqual([
-      { project: orphanProject, linkedIssue: issue({ stateType: 'completed' }) },
+      {
+        project: orphanProject,
+        linkedIssue: issue({ stateType: 'completed' }),
+        displacedCard: null,
+      },
     ]);
     expect(linear.getIssue).toHaveBeenCalledWith('ENG-1');
   });
@@ -150,7 +154,9 @@ describe('discover', () => {
 
     const snapshot = await discover(linear, todoist);
 
-    expect(snapshot.orphans).toEqual([{ project: orphanProject, linkedIssue: null }]);
+    expect(snapshot.orphans).toEqual([
+      { project: orphanProject, linkedIssue: null, displacedCard: null },
+    ]);
   });
 
   it('does not look up an issue for an orphan whose description has no parseable marker URL', async () => {
@@ -160,7 +166,9 @@ describe('discover', () => {
 
     const snapshot = await discover(linear, todoist);
 
-    expect(snapshot.orphans).toEqual([{ project: malformed, linkedIssue: null }]);
+    expect(snapshot.orphans).toEqual([
+      { project: malformed, linkedIssue: null, displacedCard: null },
+    ]);
     expect(linear.getIssue).not.toHaveBeenCalled();
   });
 
@@ -182,7 +190,7 @@ describe('discover', () => {
     const snapshot = await discover(linear, todoist);
 
     expect(snapshot.mappings[0]?.matchedProject).toEqual(matched);
-    expect(snapshot.orphans).toEqual([{ project: other, linkedIssue: null }]);
+    expect(snapshot.orphans).toEqual([{ project: other, linkedIssue: null, displacedCard: null }]);
   });
 
   describe('error context', () => {
@@ -310,6 +318,58 @@ describe('discover', () => {
 
       expect(snapshot.mappings[0]?.attachment?.id).toBe('att-moved');
       expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-own']);
+    });
+  });
+
+  describe("a displaced card carrying an orphan's watermark (#1)", () => {
+    it('hands the orphan the card that was moved off its issue', async () => {
+      // B absorbed A. Linear moved A's card onto B, where it is a stray due for deletion -
+      // but it holds A's digest watermark, and A's project is now an orphan about to be
+      // archived. Capturing it here is what lets the closing comment report A's last day.
+      const pA = project({ id: 'proj-A', url: 'https://app.todoist.com/app/project/a-proj-A' });
+      const pB = project({ id: 'proj-B', url: 'https://app.todoist.com/app/project/b-proj-B' });
+      const aCard = attachment({
+        id: 'att-A',
+        url: pA.url,
+        metadata: { syncApp: 'linear-todoist-sync', lastDigestAt: '2026-09-19T07:00:00.000Z' },
+      });
+      const bCard = attachment({ id: 'att-B', url: pB.url });
+      // Identifiers must end in digits: that is what parseIssueIdentifierFromUrl matches on
+      // when reading a project's description back.
+      const B = issue({
+        id: 'issue-B',
+        identifier: 'ENG-2',
+        url: 'https://linear.app/x/issue/ENG-2/b',
+      });
+
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([B]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([aCard, bCard]),
+        getIssue: vi.fn().mockResolvedValue(issue({ stateType: 'duplicate' })),
+      });
+      const todoist = fakeTodoist({
+        getMarkedProjects: vi.fn().mockResolvedValue([
+          { ...pA, description: 'Linked Linear issue: https://linear.app/x/issue/ENG-1/a' },
+          { ...pB, description: 'Linked Linear issue: https://linear.app/x/issue/ENG-2/b' },
+        ]),
+      });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-A']);
+      const orphan = snapshot.orphans.find((o) => o.project.id === 'proj-A');
+      expect(orphan?.displacedCard?.id).toBe('att-A');
+    });
+
+    it('leaves displacedCard null for an ordinary orphan', async () => {
+      const linear = fakeLinear({
+        getIssue: vi.fn().mockResolvedValue(issue({ stateType: 'completed' })),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([project()]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.orphans[0]?.displacedCard).toBeNull();
     });
   });
 });

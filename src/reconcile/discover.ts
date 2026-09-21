@@ -104,6 +104,11 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
     }),
   );
 
+  // A card displaced onto another issue is the only surviving copy of its project's digest
+  // watermark, and the same cycle deletes it as a stray. Cross-referencing here captures the
+  // metadata while it is still in hand, so the two actions need no ordering between them.
+  const displacedCards = mappings.flatMap((mapping) => mapping.strayAttachments);
+
   const orphanProjects = projects.filter((project) => !matchedProjectIds.has(project.id));
   const orphans: OrphanedProject[] = await Promise.all(
     orphanProjects.map(async (project) => {
@@ -126,7 +131,9 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
             () => linear.getIssue(identifier),
           )
         : null;
-      return { project, linkedIssue };
+      const displacedCard =
+        displacedCards.find((card) => cardPointsAtProject(card.url, project.id)) ?? null;
+      return { project, linkedIssue, displacedCard };
     }),
   );
 
