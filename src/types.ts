@@ -76,6 +76,12 @@ export type IssueMapping = {
   matchedProject: TodoistProjectSummary | null;
   /** This service's own marker attachment on the issue, if one currently exists (§5.4). */
   attachment: LinearAttachmentSummary | null;
+  /**
+   * Further marker cards on the same issue, which should not exist. Linear moves a duplicate's
+   * attachments onto the canonical issue, so marking B a duplicate of A leaves A holding both
+   * (§5.5). Everything here is scheduled for deletion.
+   */
+  strayAttachments: LinearAttachmentSummary[];
 };
 
 /** A marked Todoist project with no started Linear issue currently pointing at it (§5.1/§5.2). */
@@ -108,4 +114,9 @@ export type Action =
       issue: LinearIssueSummary;
     }
   | { kind: 'archive_project'; project: TodoistProjectSummary; linkedIssueId: string }
-  | { kind: 'mark_lost'; project: TodoistProjectSummary };
+  | { kind: 'mark_lost'; project: TodoistProjectSummary }
+  | {
+      kind: 'delete_stray_cards';
+      issue: LinearIssueSummary;
+      attachments: LinearAttachmentSummary[];
+    };

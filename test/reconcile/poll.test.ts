@@ -32,9 +32,10 @@ function fakeLinear(overrides: Partial<LinearPort> = {}): LinearPort {
   return {
     getStartedIssues: vi.fn().mockResolvedValue([]),
     getIssue: vi.fn().mockResolvedValue(null),
-    getMarkerAttachment: vi.fn().mockResolvedValue(null),
+    getMarkerAttachments: vi.fn().mockResolvedValue([]),
     createAttachment: vi.fn(),
     updateAttachment: vi.fn(),
+    deleteAttachment: vi.fn(),
     createComment: vi.fn(),
     ...overrides,
   };
@@ -73,13 +74,15 @@ describe('runPollCycle', () => {
     });
     const linear = fakeLinear({
       getStartedIssues: vi.fn().mockResolvedValue([issue()]),
-      getMarkerAttachment: vi.fn().mockResolvedValue({
-        id: 'att-1',
-        url: activeMatched.url,
-        title: activeMatched.name,
-        subtitle: '0 tasks outstanding',
-        metadata: {},
-      }),
+      getMarkerAttachments: vi.fn().mockResolvedValue([
+        {
+          id: 'att-1',
+          url: activeMatched.url,
+          title: activeMatched.name,
+          subtitle: '0 tasks outstanding',
+          metadata: {},
+        },
+      ]),
     });
     const todoist = fakeTodoist({
       getMarkedProjects: vi.fn().mockResolvedValue([activeMatched, archivedOrphan]),

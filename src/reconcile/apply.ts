@@ -115,8 +115,14 @@ async function applyAction(action: Action, deps: ApplyDeps): Promise<void> {
       return;
 
     case 'mark_lost':
-      await deps.todoist.updateProject(action.project.id, { name: markAsLost(action.project.name) });
+      await deps.todoist.updateProject(action.project.id, {
+        name: markAsLost(action.project.name),
+      });
       deps.metrics.reconcileActionsTotal.inc({ action: 'project_marked_lost' });
+      return;
+
+    case 'delete_stray_cards':
+      await deleteStrayCards(action.issue, action.attachments, deps);
       return;
   }
 }
@@ -158,7 +164,9 @@ async function refreshOrCreateCard(
   project: TodoistProjectSummary,
   deps: ApplyDeps,
 ): Promise<void> {
-  const attachment = await deps.linear.getMarkerAttachment(issue.id);
+  // Any stray alongside it is deleted by its own action this same cycle, so taking the first
+  // here only decides which card gets refreshed a moment earlier than the other disappears.
+  const [attachment] = await deps.linear.getMarkerAttachments(issue.id);
   if (attachment) {
     await refreshCard(issue, project, attachment, deps);
   } else {
@@ -187,6 +195,33 @@ async function refreshCard(
   deps.metrics.reconcileActionsTotal.inc({ action: 'card_updated' });
 }
 
+/**
+ * Removes marker cards that belong to an issue this one absorbed as a duplicate (§5.5).
+ *
+ * Deleting is safe in a way that deleting a Todoist project is not: a card holds nothing that
+ * does not exist elsewhere, and §5.4's self-heal recreates one from scratch if this ever
+ * removes the wrong one. The Todoist project the stray pointed at is untouched - its own issue
+ * is no longer started, so the orphan path archives it on its own terms.
+ *
+ * Failures are per-card rather than per-action so one undeletable card cannot strand the rest.
+ */
+async function deleteStrayCards(
+  issue: LinearIssueSummary,
+  attachments: LinearAttachmentSummary[],
+  deps: ApplyDeps,
+): Promise<void> {
+  for (const attachment of attachments) {
+    await deps.linear.deleteAttachment(attachment.id);
+    deps.metrics.reconcileActionsTotal.inc({ action: 'stray_card_deleted' });
+    logger.info("Removed a duplicate issue's card from the canonical issue", {
+      issue: issue.identifier,
+      issueId: issue.id,
+      attachmentId: attachment.id,
+      strayCardUrl: attachment.url,
+    });
+  }
+}
+
 async function archiveProject(
   project: TodoistProjectSummary,
   linkedIssueId: string,
@@ -205,7 +240,7 @@ async function archiveProject(
   await deps.todoist.archiveProject(project.id);
   deps.metrics.reconcileActionsTotal.inc({ action: 'project_archived' });
 
-  const attachment = await deps.linear.getMarkerAttachment(linkedIssueId);
+  const [attachment] = await deps.linear.getMarkerAttachments(linkedIssueId);
   if (attachment) {
     await deps.linear.updateAttachment(attachment.id, {
       title: attachment.title,

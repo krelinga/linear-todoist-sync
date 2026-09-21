@@ -2,12 +2,49 @@ import { parseLinkedIssueUrl } from '../naming.js';
 import { withContext } from '../errors.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
-import type { OrphanedProject, IssueMapping, Snapshot, TodoistProjectSummary } from '../types.js';
+import type {
+  OrphanedProject,
+  IssueMapping,
+  LinearAttachmentSummary,
+  Snapshot,
+  TodoistProjectSummary,
+} from '../types.js';
 
 /** Extracts e.g. "ENG-123" from a Linear issue URL like `.../issue/ENG-123/some-slug`. */
 function parseIssueIdentifierFromUrl(url: string): string | null {
   const match = /\/issue\/([A-Za-z0-9]+-\d+)/.exec(url);
   return match ? (match[1] ?? null) : null;
+}
+
+/**
+ * Picks which of an issue's marker cards is really its own, and marks the rest for deletion.
+ *
+ * An issue should only ever hold one, but Linear moves a duplicate's attachments onto the
+ * canonical issue when the relation is created, so marking B a duplicate of A leaves A holding
+ * B's card as well - ahead of its own in Linear's ordering, which is why taking the first match
+ * picked the wrong one (#1).
+ *
+ * The Todoist project is what disambiguates them: the issue's own card is the one pointing at
+ * the project this issue is currently matched to. Preferring it over position also preserves
+ * the digest watermark, which lives in that card's metadata (§6.1) - keeping the stray instead
+ * would abandon `lastDigestAt` and re-report everything already digested.
+ *
+ * With no matched project there is nothing to compare against, so the first card is kept and
+ * the rest go. Whatever that leaves is transient: planning then calls for the project to be
+ * recreated, and the following cycle matches the fresh card by URL.
+ */
+function chooseCard(
+  cards: LinearAttachmentSummary[],
+  matchedProject: TodoistProjectSummary | null,
+): { attachment: LinearAttachmentSummary | null; strayAttachments: LinearAttachmentSummary[] } {
+  const own = matchedProject
+    ? (cards.find((card) => card.url === matchedProject.url) ?? null)
+    : null;
+  const attachment = own ?? cards[0] ?? null;
+  return {
+    attachment,
+    strayAttachments: cards.filter((card) => card.id !== attachment?.id),
+  };
 }
 
 /**
@@ -45,8 +82,8 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
       if (matchedProject) {
         matchedProjectIds.add(matchedProject.id);
       }
-      const attachment = await withContext(
-        "Failed to read a started issue's Linear attachment card",
+      const cards = await withContext(
+        "Failed to read a started issue's Linear attachment cards",
         {
           phase: 'discover',
           issue: issue.identifier,
@@ -55,9 +92,10 @@ export async function discover(linear: LinearPort, todoist: TodoistPort): Promis
           todoistProject: matchedProject?.name,
           todoistProjectId: matchedProject?.id,
         },
-        () => linear.getMarkerAttachment(issue.id),
+        () => linear.getMarkerAttachments(issue.id),
       );
-      return { issue, matchedProject, attachment };
+      const { attachment, strayAttachments } = chooseCard(cards, matchedProject);
+      return { issue, matchedProject, attachment, strayAttachments };
     }),
   );
 

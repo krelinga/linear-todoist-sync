@@ -47,9 +47,10 @@ function fakeLinear(overrides: Partial<LinearPort> = {}): LinearPort {
   return {
     getStartedIssues: vi.fn().mockResolvedValue([]),
     getIssue: vi.fn().mockResolvedValue(null),
-    getMarkerAttachment: vi.fn().mockResolvedValue(null),
+    getMarkerAttachments: vi.fn().mockResolvedValue([]),
     createAttachment: vi.fn(),
     updateAttachment: vi.fn(),
+    deleteAttachment: vi.fn(),
     createComment: vi.fn(),
     ...overrides,
   };
@@ -73,14 +74,14 @@ describe('discover', () => {
   it('matches a started issue to its project via the description URL, and finds its attachment', async () => {
     const linear = fakeLinear({
       getStartedIssues: vi.fn().mockResolvedValue([issue()]),
-      getMarkerAttachment: vi.fn().mockResolvedValue(attachment()),
+      getMarkerAttachments: vi.fn().mockResolvedValue([attachment()]),
     });
     const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([project()]) });
 
     const snapshot = await discover(linear, todoist);
 
     expect(snapshot.mappings).toEqual([
-      { issue: issue(), matchedProject: project(), attachment: attachment() },
+      { issue: issue(), matchedProject: project(), attachment: attachment(), strayAttachments: [] },
     ]);
     expect(snapshot.orphans).toEqual([]);
   });
@@ -92,7 +93,7 @@ describe('discover', () => {
     });
     const linear = fakeLinear({
       getStartedIssues: vi.fn().mockResolvedValue([renamedIssue]),
-      getMarkerAttachment: vi.fn().mockResolvedValue(attachment()),
+      getMarkerAttachments: vi.fn().mockResolvedValue([attachment()]),
     });
     // Project's description still has the URL captured at creation time, with the old slug.
     const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([project()]) });
@@ -109,13 +110,15 @@ describe('discover', () => {
 
     const snapshot = await discover(linear, todoist);
 
-    expect(snapshot.mappings).toEqual([{ issue: issue(), matchedProject: null, attachment: null }]);
+    expect(snapshot.mappings).toEqual([
+      { issue: issue(), matchedProject: null, attachment: null, strayAttachments: [] },
+    ]);
   });
 
   it('surfaces an existing attachment even when no marked project currently matches it (deleted-outright case)', async () => {
     const linear = fakeLinear({
       getStartedIssues: vi.fn().mockResolvedValue([issue()]),
-      getMarkerAttachment: vi.fn().mockResolvedValue(attachment()),
+      getMarkerAttachments: vi.fn().mockResolvedValue([attachment()]),
     });
     const todoist = fakeTodoist();
 
@@ -169,7 +172,7 @@ describe('discover', () => {
     });
     const linear = fakeLinear({
       getStartedIssues: vi.fn().mockResolvedValue([issue()]),
-      getMarkerAttachment: vi.fn().mockResolvedValue(null),
+      getMarkerAttachments: vi.fn().mockResolvedValue([]),
       getIssue: vi.fn().mockResolvedValue(null),
     });
     const todoist = fakeTodoist({
@@ -215,7 +218,7 @@ describe('discover', () => {
     it('names the issue when reading its attachment card fails', async () => {
       const linear = fakeLinear({
         getStartedIssues: vi.fn().mockResolvedValue([issue()]),
-        getMarkerAttachment: vi.fn().mockRejectedValue(new Error('503 Service Unavailable')),
+        getMarkerAttachments: vi.fn().mockRejectedValue(new Error('503 Service Unavailable')),
       });
 
       const err = await discover(linear, fakeTodoist()).catch((e: unknown) => e);
@@ -237,6 +240,51 @@ describe('discover', () => {
       expect(errorMessageOf(err)).toBe(
         'Failed to list started Linear issues (phase=discover): 401 Unauthorized',
       );
+    });
+  });
+
+  describe('an issue holding more than one marker card (#1)', () => {
+    // Marking B a duplicate of A moves B's card onto A, ahead of A's own in Linear's ordering.
+    const own = attachment({ id: 'att-own', url: project().url });
+    const moved = attachment({ id: 'att-moved', url: 'https://todoist.com/showProject?id=proj-B' });
+
+    it("keeps the card pointing at the issue's own project, not the first one", async () => {
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([moved, own]),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([project()]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.attachment?.id).toBe('att-own');
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-moved']);
+    });
+
+    it('reports no strays when the only card is the right one', async () => {
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([own]),
+      });
+      const todoist = fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([project()]) });
+
+      const snapshot = await discover(linear, todoist);
+
+      expect(snapshot.mappings[0]?.strayAttachments).toEqual([]);
+    });
+
+    it('falls back to the first card when there is no project to compare against', async () => {
+      // Nothing distinguishes them here; planning will recreate the project, and the next
+      // cycle matches the fresh card by URL.
+      const linear = fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([issue()]),
+        getMarkerAttachments: vi.fn().mockResolvedValue([moved, own]),
+      });
+
+      const snapshot = await discover(linear, fakeTodoist());
+
+      expect(snapshot.mappings[0]?.attachment?.id).toBe('att-moved');
+      expect(snapshot.mappings[0]?.strayAttachments.map((a) => a.id)).toEqual(['att-own']);
     });
   });
 });
