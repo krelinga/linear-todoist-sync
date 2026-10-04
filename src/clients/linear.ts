@@ -233,6 +233,16 @@ export class LinearClient implements LinearPort {
     logger.info('Deleted Linear attachment', { system: 'linear', attachmentId: id });
   }
 
+  /**
+   * The issue, or null if Linear says there is no such issue.
+   *
+   * "No such issue" is a 4xx, and the status for it arrives in the GraphQL error body rather
+   * than on the response - see `graphqlErrorStatuses` in retry.ts, which is what makes the
+   * check below reachable at all. Every caller depends on this returning null rather than
+   * throwing: discovery looks up the issue a Todoist project's description points at, and an
+   * issue that has been deleted and purged is precisely the state §5.1's `[LOST] ` rename
+   * exists for.
+   */
   private async getIssueRaw(id: string): Promise<RawIssue | null> {
     try {
       return await this.call('issue', { issueId: id }, () => this.sdk.issue(id));

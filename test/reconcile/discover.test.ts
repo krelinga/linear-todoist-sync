@@ -415,3 +415,32 @@ describe('discover', () => {
 function errorMessageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+describe('a project whose Linear issue has been purged (#15)', () => {
+  // The client reports a purged issue as `getIssue -> null` (see getIssueRaw). What matters
+  // here is that the orphan it belongs to is handled on its own terms rather than taking the
+  // rest of the cycle down with it: a newly started issue elsewhere in the same snapshot must
+  // still come back needing a project.
+  it('does not stop a newly started issue from being discovered', async () => {
+    const fresh = issue({ id: 'issue-2', identifier: 'ENG-2', title: 'Born in progress' });
+    const ghost = project({
+      id: 'proj-ghost',
+      name: '[ENG-9] gone',
+      description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-9/gone',
+    });
+
+    const snapshot = await discover(
+      fakeLinear({
+        getStartedIssues: vi.fn().mockResolvedValue([fresh]),
+        getIssue: vi.fn().mockResolvedValue(null),
+      }),
+      fakeTodoist({ getMarkedProjects: vi.fn().mockResolvedValue([ghost]) }),
+    );
+
+    expect(snapshot.mappings).toHaveLength(1);
+    expect(snapshot.mappings[0]?.issue.identifier).toBe('ENG-2');
+    expect(snapshot.mappings[0]?.matchedProject).toBeNull();
+    expect(snapshot.orphans).toHaveLength(1);
+    expect(snapshot.orphans[0]?.linkedIssue).toBeNull();
+  });
+});
