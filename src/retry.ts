@@ -87,9 +87,47 @@ function* causeChain(error: unknown): Generator<Record<string, unknown>> {
  */
 const STATUS_KEYS = ['status', 'statusCode', 'httpStatusCode'] as const;
 
+/**
+ * Statuses Linear reports *inside* a GraphQL error rather than on the response.
+ *
+ * A GraphQL endpoint answers `200 OK` and puts the failure in the body, so the transport status
+ * describes the delivery and not the operation. Linear reports a missing entity as HTTP 200
+ * carrying `extensions.statusCode: 400` - verified live: looking up a purged issue yields
+ * `status: 200` on the error object and `400` in the error body. Authentication errors agree on
+ * both (401/401), so this is specifically how *entity* errors arrive.
+ *
+ * Reading only the transport status is therefore what made `getIssueRaw`'s "a 4xx means the
+ * issue is gone" check unreachable for the single case it exists for (#15). The lookup threw
+ * instead of returning null, and because discovery is all-or-nothing that failed the whole
+ * cycle rather than one project - so a single Todoist project whose Linear issue had been
+ * purged stopped *every* mapping from reconciling, on every cycle, permanently. What that
+ * looked like from the outside was issues created directly in "in progress" never getting a
+ * project, since creating one is the only transition with nothing already in place to notice.
+ *
+ * Checked ahead of the transport status for the same reason it exists: when a GraphQL body
+ * carries errors, the body is the more specific account of what happened.
+ */
+function* graphqlErrorStatuses(link: Record<string, unknown>): Generator<unknown> {
+  const bodies = [
+    link,
+    link['response'],
+    (link['raw'] as { response?: unknown } | undefined)?.response,
+  ];
+  for (const body of bodies) {
+    const errors = (body as { errors?: unknown } | undefined)?.errors;
+    if (!Array.isArray(errors)) {
+      continue;
+    }
+    for (const graphqlError of errors) {
+      yield (graphqlError as { extensions?: Record<string, unknown> })?.extensions?.['statusCode'];
+    }
+  }
+}
+
 export function extractHttpStatus(error: unknown): number | undefined {
   for (const link of causeChain(error)) {
     const candidates = [
+      ...graphqlErrorStatuses(link),
       ...STATUS_KEYS.map((key) => link[key]),
       (link as { response?: Record<string, unknown> }).response?.['status'],
     ];

@@ -160,3 +160,70 @@ describe('status extraction across SDK error shapes', () => {
     expect(extractHttpStatus(wrapped)).toBe(403);
   });
 });
+
+describe('status extraction from a GraphQL error body', () => {
+  /**
+   * The exact shape @linear/sdk produces for a lookup of an issue that no longer exists,
+   * captured from a live account: HTTP 200 on the error object, 400 in the body. This pairing
+   * is the whole bug behind #15 - see `graphqlErrorStatuses`.
+   */
+  function missingIssueError(): unknown {
+    return Object.assign(new Error('Entity not found: Issue - Could not find referenced Issue.'), {
+      type: 'InvalidInput',
+      status: 200,
+      errors: [{ type: 'InvalidInput', message: 'Could not find referenced Issue.' }],
+      raw: {
+        response: {
+          errors: [
+            {
+              message: 'Entity not found: Issue',
+              extensions: { type: 'invalid input', code: 'INPUT_ERROR', statusCode: 400 },
+            },
+          ],
+        },
+      },
+    });
+  }
+
+  it('prefers the GraphQL status over a transport 200', () => {
+    expect(extractHttpStatus(missingIssueError())).toBe(400);
+  });
+
+  it('still reports it as a 4xx through the wrapping the client adds', () => {
+    // getIssueRaw reads the status back off an already-wrapped error, so the preference has to
+    // survive ContextualError - this is the assertion that keeps a purged issue returning null
+    // instead of failing the whole discovery pass.
+    const wrapped = new ContextualError(
+      'Linear API request failed',
+      { operation: 'issue' },
+      missingIssueError(),
+    );
+    const status = extractHttpStatus(wrapped);
+    expect(status).toBe(400);
+    expect(status !== undefined && status >= 400 && status < 500).toBe(true);
+  });
+
+  it('does not make a missing entity retryable', () => {
+    // A 400 is as final as the 200 this used to read; what changes is only that it is now
+    // recognisable as "gone" rather than "unexplained".
+    expect(httpRetryClassifier(missingIssueError())).toEqual({ retryable: false });
+  });
+
+  it('reads a GraphQL status directly off response.errors too', () => {
+    // Not every layer wraps the body under `raw`; graphql-request puts it on `response`.
+    expect(
+      extractHttpStatus({
+        status: 200,
+        response: { errors: [{ extensions: { statusCode: 429 } }] },
+      }),
+    ).toBe(429);
+  });
+
+  it('leaves transport-level statuses alone when the body carries no status', () => {
+    // Authentication errors report 401 in both places, and anything without a GraphQL body
+    // must keep reading exactly as it did before.
+    expect(extractHttpStatus({ status: 401, raw: { response: { errors: [{}] } } })).toBe(401);
+    expect(extractHttpStatus({ status: 503, errors: 'not an array' })).toBe(503);
+    expect(extractHttpStatus({ status: 500 })).toBe(500);
+  });
+});

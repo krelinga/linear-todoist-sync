@@ -48,6 +48,23 @@ function httpError(status: number): unknown {
   return { status };
 }
 
+/**
+ * What @linear/sdk actually throws for a lookup of an issue that no longer exists, captured
+ * from a live account. The transport status is 200 - GraphQL reports the failure in the body -
+ * so only `extensions.statusCode` identifies this as a 4xx.
+ */
+function entityNotFoundError(): unknown {
+  return Object.assign(new Error('Entity not found: Issue - Could not find referenced Issue.'), {
+    type: 'InvalidInput',
+    status: 200,
+    raw: {
+      response: {
+        errors: [{ message: 'Entity not found: Issue', extensions: { statusCode: 400 } }],
+      },
+    },
+  });
+}
+
 describe('LinearClient', () => {
   describe('getStartedIssues', () => {
     it('resolves state type and maps fields', async () => {
@@ -113,6 +130,24 @@ describe('LinearClient', () => {
       const sdk: LinearSdkClient = {
         issues: vi.fn(),
         issue: vi.fn().mockRejectedValue(httpError(400)),
+        createAttachment: vi.fn(),
+        updateAttachment: vi.fn(),
+        createComment: vi.fn(),
+        deleteAttachment: vi.fn(),
+      };
+      const client = new LinearClient(sdk);
+      await expect(client.getIssue('ENG-404')).resolves.toBeNull();
+    });
+
+    it('returns null for the shape Linear really answers a purged issue with', async () => {
+      // The regression behind #15: every fake above hands getIssueRaw a bare `{ status: 4xx }`,
+      // but Linear answers a GraphQL lookup with HTTP *200* and puts the 400 in the body. The
+      // check read the transport status, so this threw instead of returning null - and since
+      // discovery looks the issue up for every orphaned project and is all-or-nothing, one
+      // purged issue failed the whole cycle on every poll, indefinitely.
+      const sdk: LinearSdkClient = {
+        issues: vi.fn(),
+        issue: vi.fn().mockRejectedValue(entityNotFoundError()),
         createAttachment: vi.fn(),
         updateAttachment: vi.fn(),
         createComment: vi.fn(),
