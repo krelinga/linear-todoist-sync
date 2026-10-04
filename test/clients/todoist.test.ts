@@ -20,6 +20,7 @@ function rawProject(overrides: Partial<RawProject> = {}): RawProject {
     url: 'https://todoist.com/showProject?id=proj-1',
     description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-1',
     isArchived: false,
+    color: 'blue',
     ...overrides,
   };
 }
@@ -47,6 +48,7 @@ describe('TodoistClient', () => {
       const archivedMarked = rawProject({
         id: 'proj-3',
         isArchived: true,
+        color: 'blue',
         description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-2',
       });
       const sdk = fakeSdk({

@@ -58,11 +58,24 @@ function main(): void {
     logger.info('Metrics server listening', { port: config.metricsPort });
   });
 
+  // With no startup verification of state names against Linear (colors design §8), this line
+  // and `sync_state_colors_configured` are what answer "is this container running the config I
+  // think I deployed" - otherwise only answerable by exec'ing into it.
+  metrics.stateColorsConfigured.set(config.stateColors.size);
+  logger.info('Loaded Todoist project colors for Linear states', {
+    stateColors: Object.fromEntries(config.stateColors),
+    defaultColor: config.defaultStateColor,
+  });
+
   const scheduler = startScheduler({
     config: {
       pollIntervalSeconds: config.pollIntervalSeconds,
       digestTime: config.digestTime,
       digestTimezone: config.digestTimezone,
+      colors: {
+        stateColors: config.stateColors,
+        defaultStateColor: config.defaultStateColor,
+      },
     },
     linear,
     todoist,

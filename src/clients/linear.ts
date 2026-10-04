@@ -16,6 +16,7 @@ import type {
 
 export interface RawWorkflowState {
   type: string;
+  name: string;
 }
 
 export interface RawAttachment {
@@ -77,13 +78,21 @@ export interface LinearPort {
   createComment(issueId: string, body: string): Promise<void>;
 }
 
-function toSummary(issue: RawIssue, stateType: string): LinearIssueSummary {
+/**
+ * The parts of an issue's workflow state this service reads. Resolved together because they
+ * come from one lazy SDK promise - the state's name is what a project color is keyed on
+ * (colors design §3) and reading it alongside the type costs nothing extra.
+ */
+type ResolvedState = { type: string; name: string };
+
+function toSummary(issue: RawIssue, state: ResolvedState): LinearIssueSummary {
   return {
     id: issue.id,
     identifier: issue.identifier,
     title: issue.title,
     url: issue.url,
-    stateType,
+    stateType: state.type,
+    stateName: state.name,
     updatedAt: issue.updatedAt.toISOString(),
   };
 }
@@ -140,7 +149,7 @@ export class LinearClient implements LinearPort {
     }
   }
 
-  private async resolveStateType(issue: RawIssue): Promise<string> {
+  private async resolveState(issue: RawIssue): Promise<ResolvedState> {
     // `issue.state` is a lazy SDK promise that can reject on its own. Not routed through `call`:
     // it is an already-created promise, so retrying would re-await the same settled result, and
     // it belongs to the request `call` already counted rather than being a request of its own.
@@ -149,7 +158,11 @@ export class LinearClient implements LinearPort {
       { system: 'linear', operation: 'issue.state', issueId: issue.id, issue: issue.identifier },
       async () => issue.state,
     );
-    return state?.type ?? 'unknown';
+    // An unresolvable state keeps the pre-existing 'unknown' type rather than throwing. The
+    // name gets the same treatment, and '' is deliberate: it matches no configured state, so
+    // such an issue takes the default color and shows up in the unmapped gauge rather than
+    // silently borrowing some other state's color.
+    return { type: state?.type ?? 'unknown', name: state?.name ?? '' };
   }
 
   async getStartedIssues(): Promise<LinearIssueSummary[]> {
@@ -172,13 +185,13 @@ export class LinearClient implements LinearPort {
       after = page.pageInfo.endCursor;
     }
     return Promise.all(
-      issues.map(async (issue) => toSummary(issue, await this.resolveStateType(issue))),
+      issues.map(async (issue) => toSummary(issue, await this.resolveState(issue))),
     );
   }
 
   async getIssue(id: string): Promise<LinearIssueSummary | null> {
     const issue = await this.getIssueRaw(id);
-    return issue ? toSummary(issue, await this.resolveStateType(issue)) : null;
+    return issue ? toSummary(issue, await this.resolveState(issue)) : null;
   }
 
   /**
@@ -225,7 +238,7 @@ export class LinearClient implements LinearPort {
     );
     const duplicate = nodes.find((relation) => relation.type === 'duplicate');
     const related = await duplicate?.relatedIssue;
-    return related ? toSummary(related, await this.resolveStateType(related)) : null;
+    return related ? toSummary(related, await this.resolveState(related)) : null;
   }
 
   async deleteAttachment(id: string): Promise<void> {

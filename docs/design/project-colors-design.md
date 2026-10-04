@@ -1,6 +1,11 @@
 # Todoist Project Colors ↔ Linear State — Design Sketch
 
-**Status:** design agreed, not implemented.
+**Status:** **implemented** (`src/colors.ts`, wired through `config.ts`, `reconcile/plan.ts`,
+`reconcile/apply.ts` and `reconcile/poll.ts`). Verified against live Linear and Todoist
+accounts: creation in three different started states, an `In Progress` → `In Review` move
+recolouring the project, a hand-recolour in Todoist pushed back, a simultaneous retitle and
+state change landing as exactly one `updateProject` call, and the unmapped gauge both
+reporting an unconfigured state and clearing once it was configured.
 
 **Section references:** bare `§N` refers to _this_ doc; the base design doc is cited as
 `base §N` and the webhook doc as `webhook §N`, matching the convention those two already use
@@ -317,8 +322,23 @@ safely, but those are vanishingly rare, and the cost is real: JSON is awkward to
 inside `.env` and `docker-compose.yml`, and a malformed brace produces a parse error that names a
 character offset rather than the entry that is wrong.
 
-## 9. On implementation
+## 9. As built
 
-Both env vars land in `.env.example` and in the base doc's §9 deployment table; the new behavior
-rows fold into its §5.1/§5.2 tables, and the new gauge plus the `project_renamed` label question
-(§5) into its §8.
+Matches this design. Where things landed, and the two decisions that were still open in §5:
+
+- `src/colors.ts` — the palette, name normalization, and `resolveStateColor` /
+  `isStateMapped`. The pair matters: a state explicitly configured as `charcoal` and an
+  unmapped one resolve to the same colour, so the resolved value cannot tell them apart and the
+  gauge reads `isStateMapped` instead.
+- `LINEAR_STATE_COLORS` / `LINEAR_STATE_COLOR_DEFAULT` parse in `config.ts`, which stays
+  pure. Both are in `.env.example` and the base doc's §9 compose snippet.
+- The `project_renamed` label question resolved as **a sibling label, not a rename**: the
+  widened action is `update_project`, and `apply.ts` increments `project_renamed` only when
+  the name changed and `project_recolored` only when the colour changed. So the existing label
+  keeps meaning a rename rather than becoming "something about the project changed", and
+  anything already built on it stays valid.
+- An unresolvable Linear state reports its name as `''`, which matches no configured entry by
+  construction — such an issue takes the default colour and appears in the gauge rather than
+  silently borrowing another state's colour.
+- The base doc gained a §5.1 row for the started-to-started transition, a §5.2 row for a
+  hand-recoloured project, and both gauges plus the `project_recolored` label in §8.1.

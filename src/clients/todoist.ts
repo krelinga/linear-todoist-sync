@@ -1,5 +1,6 @@
 import { extractHttpStatus, httpRetryClassifier, withRetry } from '../retry.js';
 import { LINKED_ISSUE_MARKER_PREFIX } from '../naming.js';
+import type { ColorKey } from '../colors.js';
 import { ContextualError, type ErrorContext } from '../errors.js';
 import { logger } from '../logger.js';
 import type { Metrics } from '../metrics.js';
@@ -22,6 +23,7 @@ export interface RawProject {
   url: string;
   description: string;
   isArchived: boolean;
+  color: string;
 }
 
 export interface RawTask {
@@ -67,8 +69,14 @@ export interface RawFullProject {
 export interface TodoistSdkClient {
   getProjects(args?: { cursor?: string | null }): Promise<RawProjectPage>;
   getArchivedProjects(args?: { cursor?: string | null }): Promise<RawProjectPage>;
-  addProject(args: { name: string; description?: string }): Promise<RawProject>;
-  updateProject(id: string, args: { name?: string; description?: string }): Promise<RawProject>;
+  // `color` is typed as the SDK's own `ColorKey` union rather than `string` so this interface
+  // stays structurally satisfiable by the real `TodoistApi`, the same reason
+  // `objectEventTypes` below is a literal type.
+  addProject(args: { name: string; description?: string; color?: ColorKey }): Promise<RawProject>;
+  updateProject(
+    id: string,
+    args: { name?: string; description?: string; color?: ColorKey },
+  ): Promise<RawProject>;
   archiveProject(id: string): Promise<RawProject>;
   unarchiveProject(id: string): Promise<RawProject>;
   getFullProject(id: string): Promise<RawFullProject>;
@@ -104,6 +112,7 @@ function toProjectSummary(project: RawProject): TodoistProjectSummary {
     url: project.url,
     description: project.description,
     isArchived: project.isArchived,
+    color: project.color,
   };
 }
 
@@ -202,13 +211,18 @@ export class TodoistClient implements TodoistPort {
   }
 
   async createProject(input: CreateProjectInput): Promise<TodoistProjectSummary> {
-    const project = await this.call('addProject', { name: input.name }, () =>
-      this.sdk.addProject({ name: input.name, description: input.description }),
+    const project = await this.call('addProject', { name: input.name, color: input.color }, () =>
+      this.sdk.addProject({
+        name: input.name,
+        description: input.description,
+        color: input.color,
+      }),
     );
     logger.info('Created Todoist project', {
       system: 'todoist',
       projectId: project.id,
       name: project.name,
+      color: project.color,
     });
     return toProjectSummary(project);
   }
