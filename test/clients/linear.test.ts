@@ -20,16 +20,19 @@ afterEach(() => {
 });
 
 function rawIssue(
-  overrides: Partial<Omit<RawIssue, 'state' | 'attachments'>> & { stateType?: string },
+  overrides: Partial<Omit<RawIssue, 'state' | 'attachments'>> & {
+    stateType?: string;
+    stateName?: string;
+  },
 ): RawIssue {
-  const { stateType, ...rest } = overrides;
+  const { stateType, stateName, ...rest } = overrides;
   return {
     id: 'issue-1',
     identifier: 'ENG-1',
     title: 'Fix the thing',
     url: 'https://linear.app/acme/issue/ENG-1',
     updatedAt: new Date('2026-08-01T00:00:00.000Z'),
-    state: Promise.resolve({ type: stateType ?? 'started' }),
+    state: Promise.resolve({ type: stateType ?? 'started', name: stateName ?? 'In Progress' }),
     attachments: vi.fn().mockResolvedValue({ nodes: [] }),
     relations: vi.fn().mockResolvedValue({ nodes: [] }),
     ...rest,
@@ -85,6 +88,7 @@ describe('LinearClient', () => {
           title: 'Fix the thing',
           url: 'https://linear.app/acme/issue/ENG-1',
           stateType: 'started',
+          stateName: 'In Progress',
           updatedAt: '2026-08-01T00:00:00.000Z',
         },
       ]);

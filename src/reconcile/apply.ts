@@ -12,6 +12,8 @@ import {
 } from '../naming.js';
 import { errorFields, type ErrorContext } from '../errors.js';
 import { logger } from '../logger.js';
+import { resolveStateColor } from '../colors.js';
+import type { PlanConfig } from './plan.js';
 import type { LinearPort } from '../clients/linear.js';
 import type { TodoistPort } from '../clients/todoist.js';
 import type { Metrics } from '../metrics.js';
@@ -23,12 +25,15 @@ import type {
   TodoistProjectSummary,
   TodoistSectionSummary,
   TodoistTaskSummary,
+  UpdateProjectInput,
 } from '../types.js';
 
 export type ApplyDeps = {
   linear: LinearPort;
   todoist: TodoistPort;
   metrics: Metrics;
+  /** Needed only by project creation, which has to pick a color before any project exists. */
+  colors: PlanConfig;
 };
 
 export type ApplyResult = { succeeded: number; failed: number };
@@ -100,12 +105,27 @@ async function applyAction(action: Action, deps: ApplyDeps): Promise<void> {
       await refreshOrCreateCard(action.issue, action.project, deps);
       return;
 
-    case 'rename_project':
-      await deps.todoist.updateProject(action.project.id, {
-        name: buildProjectName(action.issue.identifier, action.issue.title),
-      });
-      deps.metrics.reconcileActionsTotal.inc({ action: 'project_renamed' });
+    case 'update_project': {
+      // One call for both fields (colors design §5). Built conditionally so an unchanged field
+      // is absent rather than sent as undefined, and counted per-field so `project_renamed`
+      // keeps meaning what it always did rather than becoming "something about the project
+      // changed" - existing dashboards and the §8 metric list stay valid.
+      const input: UpdateProjectInput = {};
+      if (action.name !== undefined) {
+        input.name = action.name;
+      }
+      if (action.color !== undefined) {
+        input.color = action.color;
+      }
+      await deps.todoist.updateProject(action.project.id, input);
+      if (action.name !== undefined) {
+        deps.metrics.reconcileActionsTotal.inc({ action: 'project_renamed' });
+      }
+      if (action.color !== undefined) {
+        deps.metrics.reconcileActionsTotal.inc({ action: 'project_recolored' });
+      }
       return;
+    }
 
     case 'reattach_card':
       await createCardForExistingProject(action.issue, action.project, deps);
@@ -137,6 +157,13 @@ async function createProjectAndCard(issue: LinearIssueSummary, deps: ApplyDeps):
   const project = await deps.todoist.createProject({
     name: buildProjectName(issue.identifier, issue.title),
     description: buildProjectDescription(issue.url),
+    // Set at creation rather than left for the next cycle to reconcile: `addProject` takes it
+    // in the same call, so the project is never briefly the wrong colour (colors design §5).
+    color: resolveStateColor(
+      issue.stateName,
+      deps.colors.stateColors,
+      deps.colors.defaultStateColor,
+    ),
   });
   await deps.linear.createAttachment({
     issueId: issue.id,

@@ -1,3 +1,12 @@
+import {
+  colorKeys,
+  FALLBACK_STATE_COLOR,
+  isColorKey,
+  normalizeStateName,
+  type ColorKey,
+  type StateColorMap,
+} from './colors.js';
+
 /**
  * Settings for the Linear webhook receiver (webhook design §9). Present only when a signing
  * secret is configured - see `parseWebhook` for why that gate is the whole feature flag.
@@ -18,6 +27,10 @@ export type Config = {
   metricsPort: number;
   /** null means poll-only mode: no receiver is started at all (webhook design §5.6). */
   webhook: WebhookConfig | null;
+  /** Linear state name -> Todoist project color (colors design §4). Empty disables coloring. */
+  stateColors: StateColorMap;
+  /** Color for a started state `stateColors` does not mention (colors design §5). */
+  defaultStateColor: ColorKey;
 };
 
 class ConfigError extends Error {}
@@ -96,6 +109,75 @@ function parseWebhook(env: NodeJS.ProcessEnv, metricsPort: number): WebhookConfi
   return { secret, port, path, debounceMs: parsePositiveInt(env, 'WEBHOOK_DEBOUNCE_MS', 2000) };
 }
 
+/**
+ * Parses `LINEAR_STATE_COLORS` - `"In Progress=blue,In Review=grape"` (colors design §4).
+ *
+ * Each entry splits on its **last** `=`, not its first: a color key never contains one, so
+ * splitting from the right lets a state name contain `=` for free. The shape this form cannot
+ * express is a state name containing a comma, which is an accepted limit - such a name splits
+ * into fragments matching no Linear state, so its projects take the default color and the state
+ * appears in the unmapped gauge like any other gap.
+ *
+ * Absent or empty is valid and means "color nothing": every project gets the default. That is a
+ * legitimate way to switch the feature off rather than a misconfiguration.
+ */
+function parseStateColors(env: NodeJS.ProcessEnv): StateColorMap {
+  const raw = env.LINEAR_STATE_COLORS;
+  if (raw === undefined || raw.trim() === '') {
+    return new Map();
+  }
+
+  const stateColors = new Map<string, ColorKey>();
+  const names = new Map<string, string>();
+  for (const entry of raw.split(',')) {
+    if (entry.trim() === '') {
+      continue; // A trailing or doubled comma is sloppy, not ambiguous.
+    }
+    const separator = entry.lastIndexOf('=');
+    if (separator === -1) {
+      throw new ConfigError(
+        `LINEAR_STATE_COLORS entry is missing "=": ${entry.trim()}. Expected "State Name=color".`,
+      );
+    }
+    const name = entry.slice(0, separator).trim();
+    const color = entry.slice(separator + 1).trim();
+    if (name === '') {
+      throw new ConfigError(`LINEAR_STATE_COLORS entry has an empty state name: ${entry.trim()}`);
+    }
+    if (!isColorKey(color)) {
+      throw new ConfigError(
+        `LINEAR_STATE_COLORS gives state "${name}" an unknown Todoist color "${color}". Valid colors: ${colorKeys().join(', ')}`,
+      );
+    }
+    const key = normalizeStateName(name);
+    const existing = names.get(key);
+    if (existing !== undefined) {
+      // Not last-one-wins: the two entries disagree about intent, and silently picking one
+      // would leave the operator looking at a colour they did not ask for with no hint why.
+      throw new ConfigError(
+        `LINEAR_STATE_COLORS names the same state twice ("${existing}" and "${name}"); state names are matched case-insensitively`,
+      );
+    }
+    names.set(key, name);
+    stateColors.set(key, color);
+  }
+  return stateColors;
+}
+
+function parseDefaultStateColor(env: NodeJS.ProcessEnv): ColorKey {
+  const raw = env.LINEAR_STATE_COLOR_DEFAULT;
+  if (raw === undefined || raw.trim() === '') {
+    return FALLBACK_STATE_COLOR;
+  }
+  const color = raw.trim();
+  if (!isColorKey(color)) {
+    throw new ConfigError(
+      `LINEAR_STATE_COLOR_DEFAULT is not a known Todoist color: ${color}. Valid colors: ${colorKeys().join(', ')}`,
+    );
+  }
+  return color;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const metricsPort = parsePositiveInt(env, 'METRICS_PORT', 9464);
   return {
@@ -106,6 +188,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     digestTimezone: parseDigestTimezone(env, 'UTC'),
     metricsPort,
     webhook: parseWebhook(env, metricsPort),
+    stateColors: parseStateColors(env),
+    defaultStateColor: parseDefaultStateColor(env),
   };
 }
 

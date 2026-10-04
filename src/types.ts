@@ -1,3 +1,5 @@
+import type { ColorKey } from './colors.js';
+
 /** A Linear issue, normalized to the fields this service actually needs. */
 export type LinearIssueSummary = {
   id: string;
@@ -5,6 +7,12 @@ export type LinearIssueSummary = {
   title: string;
   url: string;
   stateType: string;
+  /**
+   * The workflow state's display name (e.g. `In Progress`), which is what a project color is
+   * keyed on (colors design §3). Free to carry: the client already resolves the whole state
+   * object in order to read `stateType`, so this costs no extra request.
+   */
+  stateName: string;
   updatedAt: string;
 };
 
@@ -39,6 +47,12 @@ export type TodoistProjectSummary = {
   url: string;
   description: string;
   isArchived: boolean;
+  /**
+   * Current Todoist color key. Read so that divergence from the issue's state color is
+   * detectable, exactly as `name` is - a plain `string` rather than `ColorKey` because this is
+   * whatever Todoist reports, which is not ours to assume is in the palette we know.
+   */
+  color: string;
 };
 
 export type TodoistTaskSummary = {
@@ -62,11 +76,13 @@ export type TodoistSectionSummary = {
 export type CreateProjectInput = {
   name: string;
   description: string;
+  color: ColorKey;
 };
 
 export type UpdateProjectInput = {
   name?: string;
   description?: string;
+  color?: ColorKey;
 };
 
 /** A started Linear issue paired with whatever this service already knows about it (§5 step 3). */
@@ -112,7 +128,19 @@ export type Action =
   | { kind: 'create_project'; issue: LinearIssueSummary }
   | { kind: 'recreate_project'; issue: LinearIssueSummary; previousProjectUrl: string }
   | { kind: 'unarchive_project'; project: TodoistProjectSummary; issue: LinearIssueSummary }
-  | { kind: 'rename_project'; project: TodoistProjectSummary; issue: LinearIssueSummary }
+  /**
+   * Brings a project's mutable fields back in line with Linear - the name (§5.1) and the color
+   * its state implies (colors design §5). One action rather than two because `updateProject`
+   * takes both in a single call, so a rename that also changes color must not cost two writes.
+   * Only the fields that actually diverged are present; planning never emits this with neither.
+   */
+  | {
+      kind: 'update_project';
+      project: TodoistProjectSummary;
+      issue: LinearIssueSummary;
+      name?: string;
+      color?: ColorKey;
+    }
   | { kind: 'reattach_card'; issue: LinearIssueSummary; project: TodoistProjectSummary }
   | {
       kind: 'refresh_card';

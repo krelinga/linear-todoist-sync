@@ -1,5 +1,6 @@
 import { Lock } from './lock.js';
 import { runPollCycle, type PollTrigger } from './reconcile/poll.js';
+import type { PlanConfig } from './reconcile/plan.js';
 import { runDigestJob } from './digest/digest.js';
 import { errorFields } from './errors.js';
 import { logger } from './logger.js';
@@ -11,6 +12,8 @@ export type SchedulerConfig = {
   pollIntervalSeconds: number;
   digestTime: string;
   digestTimezone: string;
+  /** State-to-colour mapping, passed straight through to each poll cycle. */
+  colors: PlanConfig;
 };
 
 export type SchedulerDeps = {
@@ -62,6 +65,7 @@ export function startScheduler(deps: SchedulerDeps): Scheduler {
           linear: deps.linear,
           todoist: deps.todoist,
           metrics: deps.metrics,
+          colors: deps.config.colors,
           trigger,
         }),
       )

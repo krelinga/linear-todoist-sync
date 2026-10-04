@@ -133,6 +133,38 @@ export function createMetrics(registry: Registry = new Registry()) {
     registers: [registry],
   });
 
+  /**
+   * Started issues sitting in a workflow state that `LINEAR_STATE_COLORS` has no entry for
+   * (colors design §6.1). One series per offending state name, absent entirely when there are
+   * none.
+   *
+   * A gauge rather than a counter, and that distinction is the whole point. Color is only
+   * *written* when it diverges, so once a mis-colored project has settled at the default no
+   * further writes happen - a counter would stop incrementing at precisely the moment the
+   * problem became permanent and read as "resolved". Recomputed from each discovery pass, this
+   * keeps saying "three issues are in a state I have no color for" for as long as that is true,
+   * and drops to nothing when it is fixed. Same split as `mappings` above: current state is a
+   * gauge, throughput is a counter.
+   *
+   * **Callers must `reset()` this before repopulating it each cycle.** A labelled prom-client
+   * gauge retains every label combination it has ever been given, so without that the series
+   * for a state outlives the condition - producing an alert that can never clear and that no
+   * amount of fixing the config will silence. Same family of hazard as
+   * `unsetUntilFirstWrite`: a stale sample is a confident lie.
+   */
+  const stateColorUnmapped = new Gauge({
+    name: 'sync_state_color_unmapped',
+    help: 'Started issues whose Linear workflow state has no configured Todoist color, by state name. Absent when none.',
+    labelNames: ['state'] as const,
+    registers: [registry],
+  });
+
+  const stateColorsConfigured = new Gauge({
+    name: 'sync_state_colors_configured',
+    help: 'Number of state-to-color entries parsed from LINEAR_STATE_COLORS. Diagnostic: answers whether the container is running the config you think you deployed.',
+    registers: [registry],
+  });
+
   return {
     registry,
     lastPollSuccessTimestampSeconds,
@@ -149,5 +181,7 @@ export function createMetrics(registry: Registry = new Registry()) {
     apiRequestsTotal,
     apiRequestDurationSeconds,
     mappings,
+    stateColorUnmapped,
+    stateColorsConfigured,
   };
 }

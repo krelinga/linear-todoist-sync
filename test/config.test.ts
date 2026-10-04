@@ -20,6 +20,8 @@ describe('loadConfig', () => {
       digestTimezone: 'UTC',
       metricsPort: 9464,
       webhook: null,
+      stateColors: new Map(),
+      defaultStateColor: 'charcoal',
     });
   });
 
@@ -108,5 +110,97 @@ describe('loadConfig', () => {
         loadConfig(baseEnv({ LINEAR_WEBHOOK_SECRET: 'shh', WEBHOOK_PATH: 'webhooks/linear' })),
       ).toThrow(ConfigError);
     });
+  });
+});
+
+describe('loadConfig - LINEAR_STATE_COLORS (colors design §4)', () => {
+  const base = { LINEAR_API_KEY: 'k', TODOIST_API_TOKEN: 't' };
+
+  it('parses entries, trimming and lowercasing the state names', () => {
+    const config = loadConfig({
+      ...base,
+      LINEAR_STATE_COLORS: 'In Progress=blue, In Review =grape,BLOCKED=red',
+    });
+    expect(config.stateColors).toEqual(
+      new Map([
+        ['in progress', 'blue'],
+        ['in review', 'grape'],
+        ['blocked', 'red'],
+      ]),
+    );
+  });
+
+  it('treats an absent or empty value as "colour nothing" rather than an error', () => {
+    // A legitimate way to switch the feature off (§4), not a misconfiguration.
+    expect(loadConfig({ ...base }).stateColors).toEqual(new Map());
+    expect(loadConfig({ ...base, LINEAR_STATE_COLORS: '' }).stateColors).toEqual(new Map());
+    expect(loadConfig({ ...base, LINEAR_STATE_COLORS: '   ' }).stateColors).toEqual(new Map());
+  });
+
+  it('ignores a trailing or doubled comma', () => {
+    const config = loadConfig({ ...base, LINEAR_STATE_COLORS: 'In Progress=blue,,' });
+    expect(config.stateColors).toEqual(new Map([['in progress', 'blue']]));
+  });
+
+  it('splits on the LAST equals, so a state name may contain one', () => {
+    // A colour key never contains '=', so splitting from the right is free (§4).
+    const config = loadConfig({ ...base, LINEAR_STATE_COLORS: 'Needs QA=/=blocked=red' });
+    expect(config.stateColors).toEqual(new Map([['needs qa=/=blocked', 'red']]));
+  });
+
+  it('rejects an unknown colour, naming the state and listing the valid keys', () => {
+    expect(() =>
+      loadConfig({ ...base, LINEAR_STATE_COLORS: 'In Progress=periwinkle' }),
+    ).toThrowError(/state "In Progress" an unknown Todoist color "periwinkle"/);
+    expect(() =>
+      loadConfig({ ...base, LINEAR_STATE_COLORS: 'In Progress=periwinkle' }),
+    ).toThrowError(/sky_blue/);
+  });
+
+  it('rejects an entry with no equals at all', () => {
+    expect(() => loadConfig({ ...base, LINEAR_STATE_COLORS: 'In Progress' })).toThrowError(
+      /missing "="/,
+    );
+  });
+
+  it('rejects an empty state name', () => {
+    expect(() => loadConfig({ ...base, LINEAR_STATE_COLORS: '=blue' })).toThrowError(
+      /empty state name/,
+    );
+  });
+
+  it('rejects a duplicate state rather than letting the last one win', () => {
+    // The two entries disagree about intent; silently picking one leaves the operator looking
+    // at a colour they did not ask for with no hint why (§4).
+    expect(() =>
+      loadConfig({ ...base, LINEAR_STATE_COLORS: 'In Progress=blue,in progress=red' }),
+    ).toThrowError(/names the same state twice/);
+  });
+
+  it('is a ConfigError, so main() exits cleanly rather than throwing a stack trace', () => {
+    expect(() => loadConfig({ ...base, LINEAR_STATE_COLORS: 'x=nope' })).toThrowError(ConfigError);
+  });
+});
+
+describe('loadConfig - LINEAR_STATE_COLOR_DEFAULT', () => {
+  const base = { LINEAR_API_KEY: 'k', TODOIST_API_TOKEN: 't' };
+
+  it("defaults to the SDK's own default colour when unset or blank", () => {
+    expect(loadConfig({ ...base }).defaultStateColor).toBe('charcoal');
+    expect(loadConfig({ ...base, LINEAR_STATE_COLOR_DEFAULT: '  ' }).defaultStateColor).toBe(
+      'charcoal',
+    );
+  });
+
+  it('accepts any real colour key, trimmed', () => {
+    expect(loadConfig({ ...base, LINEAR_STATE_COLOR_DEFAULT: ' taupe ' }).defaultStateColor).toBe(
+      'taupe',
+    );
+  });
+
+  it('rejects an unknown colour', () => {
+    expect(() => loadConfig({ ...base, LINEAR_STATE_COLOR_DEFAULT: 'burnt_sienna' })).toThrowError(
+      ConfigError,
+    );
   });
 });

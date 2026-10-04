@@ -121,7 +121,8 @@ Because there's no separate cache to consult, recovery isn't a distinct procedur
 | Trigger | Action |
 |---|---|
 | Issue enters "started" category (new, or re-entering after having left) | If no active marked Todoist project is found for this issue, search archived marked projects first — if one matches, unarchive it and un-freeze its attachment card (preserves task history) instead of creating a new one. Otherwise, create a fresh Todoist project named from the issue (§6.2), set its description to link back to the Linear issue (§6.2), and create a Linear attachment card linking to the Todoist project (§5.4). |
-| In-progress issue's title changes | Reconciliation renames the Todoist project to match on the next poll. (Same code path handles the Todoist-side rename conflict in §5.2 — the app always pushes Linear's title as truth.) |
+| In-progress issue's title changes | Reconciliation renames the Todoist project to match on the next poll. (Same code path handles the Todoist-side rename conflict in §5.2 — the app always pushes Linear's title as truth.) Name and colour are reconciled by one `update_project` action and therefore one API call, since Todoist's `updateProject` takes both together — a retitle that also changes state costs a single write, not two. |
+| In-progress issue moves between two **started** states (`In Progress` → `In Review`) | The Todoist project is recoloured on the next poll, per the state-to-colour mapping in `LINEAR_STATE_COLORS` (§9). Nothing else about the mapping changes — the issue never left "started", so the project is neither created nor archived. A started state with no configured colour gets `LINEAR_STATE_COLOR_DEFAULT` and is reported in `sync_state_color_unmapped` (§8.1). Full rationale in `docs/design/project-colors-design.md`. |
 | In-progress issue moves to another state (Todo, Done, Canceled, etc.) | Close the mapping out (§5.6): post a Todoist project comment calling out any incomplete tasks, archive the Todoist project, update the Linear attachment card's subtitle to a frozen "archived" summary (§5.4), and post a closing comment to the issue reporting both what was completed since the last digest and what is still outstanding. Tasks are left exactly as they are — no auto-complete, no move. |
 | Issue is marked a **duplicate** of another | Two things happen at once and only one of them is a state change. The issue leaves "started", so its mapping closes out exactly as the row above. Separately — and not as a consequence — Linear **moves the issue's attachments onto the canonical issue**, which is what §5.5 exists to handle. The closing comment goes to both issues (§5.6), so the side where work continues learns that an archived project full of unfinished tasks exists. |
 | Issue **absorbs** a duplicate | Not a state change for this issue at all: it stays "started" and keeps its own project. It does acquire the duplicate's card, which is removed on the next cycle (§5.5), and it receives the duplicate's closing comment (§5.6). Chains resolve one hop at a time — with A a duplicate of B and B of C, each closing comment names its immediate absorber, and following them reconstructs the chain. |
@@ -137,6 +138,7 @@ This is a deliberate design invariant, not just a choice for this one case: noth
 |---|---|
 | A tracked (active) Todoist project is archived directly by the user | Unarchived on the next poll — while the Linear issue is still "started", Linear owns the project's lifecycle. |
 | A tracked project is renamed directly | Reconciled back to the Linear-derived name on the next poll ("Linear wins," per §2.3). |
+| A tracked project's **colour** is changed directly | Reconciled back to the colour its Linear state implies, for the same reason and by the same action as a rename. The cost is that a hand-picked colour on a mirrored project does not survive; that is accepted deliberately, since it is what makes the started-to-started transition in §5.1 work at all. |
 | A tracked project is deleted outright (not archived) | Its history can't be recovered either way, so the simplest path is taken: a fresh Todoist project is created and linked exactly as in the "issue enters started" case (§5.1). A Linear comment notes that the previous project was deleted and a new one was created, so the swap isn't silent. The event is counted separately (`project_recreated`, §8) for visibility. |
 | A task is manually added to a mirrored project | No special handling needed — it's just a normal Todoist task. It shows up in the daily digest like any other completed task, and (per §2.3) stays in the project through an eventual archive. |
 
@@ -303,7 +305,7 @@ The two gauge kinds are a pair and should not be collapsed: the result gauge ans
 |---|---|---|
 | `sync_poll_runs_total{result}` | counter | `result="success"` \| `"error"`, one per poll cycle |
 | `sync_poll_duration_seconds` | histogram | Time taken per poll cycle |
-| `sync_reconcile_actions_total{action}` | counter | `action="project_created"` \| `"project_renamed"` \| `"project_archived"` \| `"project_unarchived"` \| `"project_recreated"` \| `"card_reattached"` \| `"project_marked_lost"` \| `"comment_posted"` \| `"card_updated"` \| `"stray_card_deleted"` \| `"closing_comment_posted"` |
+| `sync_reconcile_actions_total{action}` | counter | `action="project_created"` \| `"project_renamed"` \| `"project_recolored"` \| `"project_archived"` \| `"project_unarchived"` \| `"project_recreated"` \| `"card_reattached"` \| `"project_marked_lost"` \| `"comment_posted"` \| `"card_updated"` \| `"stray_card_deleted"` \| `"closing_comment_posted"` |
 | `sync_digest_comments_posted_total` | counter | Digest comments actually posted (excludes runs skipped for having nothing to report) |
 
 **Upstream API health:**
@@ -318,6 +320,8 @@ The two gauge kinds are a pair and should not be collapsed: the result gauge ans
 | Metric | Type | Meaning |
 |---|---|---|
 | `sync_mappings{status}` | gauge | Count of currently discovered mappings by state (`active`, `archived`) — computed fresh from each poll's discovery pass (§5), not read from a local table, since there isn't one. |
+| `sync_state_color_unmapped{state}` | gauge | Started issues whose Linear state has no entry in `LINEAR_STATE_COLORS` (§9), one series per state name, **absent entirely when there are none**. A renamed state, a newly added one and a misspelled config entry all surface here identically, since all three mean "Linear is using a state name the config does not mention". A gauge rather than a counter deliberately: colour is only *written* when it diverges, so a counter would stop incrementing once a mis-coloured project settled — going quiet at exactly the moment the problem became permanent. Repopulated from each discovery pass, so it clears itself when fixed. |
+| `sync_state_colors_configured` | gauge | Number of entries parsed from `LINEAR_STATE_COLORS`. Diagnostic: answers whether the container is running the config you think you deployed, which is otherwise only answerable by `exec`ing into it. |
 
 ### 8.2 Suggested alerts
 
@@ -326,6 +330,8 @@ One rule covers the case worth waking up for; everything else in §8.1 is diagno
 - **Sync is stuck:** `time() - sync_last_poll_success_timestamp_seconds > 300` — no successful poll in 5 minutes, well past the expected 1-minute cadence.
 
 Todoist projects deleted outright, or cards that go missing, are self-healed automatically (§5.2, §5.4) rather than requiring manual intervention, so there's no alert for either case — but `sync_reconcile_actions_total{action="project_recreated"}` and `action="card_reattached"` are both there to glance at if you're curious how often self-healing actually kicks in.
+
+`sync_state_color_unmapped` has its own warning-severity rule, given in `docs/design/project-colors-design.md` §6.2 rather than here, since it alerts on a cosmetic condition and should never page.
 
 `action="project_marked_lost"` (§5.1) is different in kind — it's not self-healing, it's a marker that a human needs to eventually look at and decide what to do with. It's not urgent enough to page on, but it's worth an occasional glance (or a low-priority alert if `[LOST]` projects start piling up) since nothing in this design will ever clean one of those up on its own.
 
@@ -365,6 +371,8 @@ services:
       DIGEST_TIME: "07:00"
       DIGEST_TIMEZONE: "America/Chicago"
       METRICS_PORT: 9464
+      LINEAR_STATE_COLORS: "In Progress=blue,In Review=grape,Blocked=red"
+      LINEAR_STATE_COLOR_DEFAULT: charcoal
     ports:
       - "9464:9464"
 ```

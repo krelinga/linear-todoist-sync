@@ -16,6 +16,7 @@ function issue(overrides: Partial<LinearIssueSummary> = {}): LinearIssueSummary 
     title: 'Fix the thing',
     url: 'https://linear.app/acme/issue/ENG-1/fix-the-thing',
     stateType: 'started',
+    stateName: 'In Progress',
     updatedAt: '2026-08-01T00:00:00.000Z',
     ...overrides,
   };
@@ -28,6 +29,7 @@ function project(overrides: Partial<TodoistProjectSummary> = {}): TodoistProject
     url: 'https://todoist.com/showProject?id=proj-1',
     description: 'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-thing',
     isArchived: false,
+    color: 'blue',
     ...overrides,
   };
 }

@@ -6,11 +6,21 @@ import type { TodoistPort } from '../src/clients/todoist.js';
 const runPollCycle = vi.fn().mockResolvedValue(undefined);
 const runDigestJob = vi.fn().mockResolvedValue(undefined);
 
-vi.mock('../src/reconcile/poll.js', () => ({ runPollCycle: (...args: unknown[]) => runPollCycle(...args) }));
-vi.mock('../src/digest/digest.js', () => ({ runDigestJob: (...args: unknown[]) => runDigestJob(...args) }));
+vi.mock('../src/reconcile/poll.js', () => ({
+  runPollCycle: (...args: unknown[]) => runPollCycle(...args),
+}));
+vi.mock('../src/digest/digest.js', () => ({
+  runDigestJob: (...args: unknown[]) => runDigestJob(...args),
+}));
 
 // Imported after the mocks above so scheduler.ts picks up the mocked modules.
 const { startScheduler } = await import('../src/scheduler.js');
+
+/** The scheduler only forwards this; it never looks inside (colors design §5). */
+const COLORS = {
+  stateColors: new Map([['in progress', 'blue' as const]]),
+  defaultStateColor: 'charcoal' as const,
+};
 
 function fakePorts() {
   return {
@@ -30,7 +40,12 @@ describe('startScheduler', () => {
   it('runs an immediate poll on startup rather than waiting for the first interval', async () => {
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 60, digestTime: '23:59', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 60,
+        digestTime: '23:59',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -46,7 +61,12 @@ describe('startScheduler', () => {
     vi.useFakeTimers();
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 60, digestTime: '23:59', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 60,
+        digestTime: '23:59',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -66,7 +86,12 @@ describe('startScheduler', () => {
     vi.setSystemTime(new Date('2026-08-10T05:00:00.000Z'));
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 3600, digestTime: '07:00', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 3600,
+        digestTime: '07:00',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -84,7 +109,12 @@ describe('startScheduler', () => {
     vi.setSystemTime(new Date('2026-08-10T08:00:00.000Z'));
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 3600, digestTime: '07:00', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 3600,
+        digestTime: '07:00',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -102,7 +132,12 @@ describe('startScheduler', () => {
     vi.setSystemTime(new Date('2026-08-10T07:00:00.000Z'));
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 100_000, digestTime: '07:00', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 100_000,
+        digestTime: '07:00',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -122,7 +157,12 @@ describe('startScheduler', () => {
     vi.setSystemTime(new Date('2026-08-10T23:59:30.000Z'));
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 100_000, digestTime: '00:00', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 100_000,
+        digestTime: '00:00',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -153,7 +193,12 @@ describe('startScheduler', () => {
     });
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 60, digestTime: '07:00', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 60,
+        digestTime: '07:00',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -171,17 +216,26 @@ describe('startScheduler', () => {
     vi.useFakeTimers();
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 60, digestTime: '23:59', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 60,
+        digestTime: '23:59',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
     });
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(runPollCycle).toHaveBeenLastCalledWith(expect.objectContaining({ trigger: 'scheduled' }));
+      expect(runPollCycle).toHaveBeenLastCalledWith(
+        expect.objectContaining({ trigger: 'scheduled' }),
+      );
       scheduler.requestPoll();
       await vi.advanceTimersByTimeAsync(0);
-      expect(runPollCycle).toHaveBeenLastCalledWith(expect.objectContaining({ trigger: 'webhook' }));
+      expect(runPollCycle).toHaveBeenLastCalledWith(
+        expect.objectContaining({ trigger: 'webhook' }),
+      );
     } finally {
       scheduler.stop();
     }
@@ -193,7 +247,12 @@ describe('startScheduler', () => {
     vi.useFakeTimers();
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 60, digestTime: '23:59', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 60,
+        digestTime: '23:59',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -222,7 +281,12 @@ describe('startScheduler', () => {
     vi.useFakeTimers();
     const { linear, todoist, metrics } = fakePorts();
     const scheduler = startScheduler({
-      config: { pollIntervalSeconds: 60, digestTime: '23:59', digestTimezone: 'UTC' },
+      config: {
+        pollIntervalSeconds: 60,
+        digestTime: '23:59',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
       linear,
       todoist,
       metrics,
@@ -232,5 +296,39 @@ describe('startScheduler', () => {
     const callsAtStop = runPollCycle.mock.calls.length;
     await vi.advanceTimersByTimeAsync(600_000);
     expect(runPollCycle.mock.calls.length).toBe(callsAtStop);
+  });
+});
+
+describe('startScheduler - colour config pass-through', () => {
+  it('forwards the state colours to every poll cycle it starts', async () => {
+    // The one piece of wiring nothing else covers: config -> scheduler -> runPollCycle. Tests
+    // are outside tsconfig's `include`, so a dropped field here would not fail typecheck, and
+    // the symptom in production would be no colouring at all rather than an error.
+    vi.useFakeTimers();
+    const scheduler = startScheduler({
+      config: {
+        pollIntervalSeconds: 60,
+        digestTime: '23:59',
+        digestTimezone: 'UTC',
+        colors: COLORS,
+      },
+      linear: {} as LinearPort,
+      todoist: {} as TodoistPort,
+      metrics: createMetrics(),
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPollCycle).toHaveBeenLastCalledWith(expect.objectContaining({ colors: COLORS }));
+
+      // And on the webhook-triggered path, which builds its own deps object.
+      scheduler.requestPoll();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPollCycle).toHaveBeenLastCalledWith(
+        expect.objectContaining({ colors: COLORS, trigger: 'webhook' }),
+      );
+    } finally {
+      scheduler.stop();
+      vi.useRealTimers();
+    }
   });
 });

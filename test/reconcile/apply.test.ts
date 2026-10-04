@@ -23,6 +23,7 @@ function issue(overrides: Partial<LinearIssueSummary> = {}): LinearIssueSummary 
     title: 'Fix the flaky login test',
     url: 'https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
     stateType: 'started',
+    stateName: 'In Progress',
     updatedAt: '2026-08-01T00:00:00.000Z',
     ...overrides,
   };
@@ -36,6 +37,7 @@ function project(overrides: Partial<TodoistProjectSummary> = {}): TodoistProject
     description:
       'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
     isArchived: false,
+    color: 'blue',
     ...overrides,
   };
 }
@@ -54,6 +56,12 @@ function attachment(overrides: Partial<LinearAttachmentSummary> = {}): LinearAtt
 function task(overrides: Partial<TodoistTaskSummary> = {}): TodoistTaskSummary {
   return { id: 't1', content: 'Do the thing', sectionId: null, ...overrides };
 }
+
+/** Apply only needs colours for project *creation*, which must pick one up front. */
+const COLORS = {
+  stateColors: new Map([['in progress', 'blue' as const]]),
+  defaultStateColor: 'charcoal' as const,
+};
 
 function fakeLinear(overrides: Partial<LinearPort> = {}): LinearPort {
   return {
@@ -95,13 +103,15 @@ describe('applyActions', () => {
     const metrics = createMetrics();
     const actions: Action[] = [{ kind: 'create_project', issue: issue() }];
 
-    const result = await applyActions(actions, { linear, todoist, metrics });
+    const result = await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
     expect(result).toEqual({ succeeded: 1, failed: 0 });
     expect(todoist.createProject).toHaveBeenCalledWith({
       name: '[ENG-1] Fix the flaky login test',
       description:
         'Linked Linear issue: https://linear.app/acme/issue/ENG-1/fix-the-flaky-login-test',
+      // Set in the same call, so the project is never briefly the wrong colour.
+      color: 'blue',
     });
     expect(linear.createAttachment).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -126,7 +136,7 @@ describe('applyActions', () => {
       },
     ];
 
-    await applyActions(actions, { linear, todoist, metrics });
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
     expect(todoist.createProject).toHaveBeenCalled();
     expect(linear.createAttachment).toHaveBeenCalled();
@@ -150,7 +160,7 @@ describe('applyActions', () => {
       const metrics = createMetrics();
       const actions: Action[] = [{ kind: 'unarchive_project', project: project(), issue: issue() }];
 
-      await applyActions(actions, { linear, todoist, metrics });
+      await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
       expect(todoist.unarchiveProject).toHaveBeenCalledWith('proj-1');
       expect(linear.updateAttachment).toHaveBeenCalledWith(
@@ -166,24 +176,24 @@ describe('applyActions', () => {
       const metrics = createMetrics();
       const actions: Action[] = [{ kind: 'unarchive_project', project: project(), issue: issue() }];
 
-      await applyActions(actions, { linear, todoist, metrics });
+      await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
       expect(linear.createAttachment).toHaveBeenCalled();
       expect(await actionCounts(metrics)).toEqual({ project_unarchived: 1, card_reattached: 1 });
     });
   });
 
-  it('renames the Todoist project for rename_project', async () => {
+  it('renames the Todoist project for update_project', async () => {
     const linear = fakeLinear();
     const todoist = fakeTodoist();
     const metrics = createMetrics();
-    const actions: Action[] = [{ kind: 'rename_project', project: project(), issue: issue() }];
+    const actions: Action[] = [
+      { kind: 'update_project', project: project(), issue: issue(), name: '[ENG-1] New name' },
+    ];
 
-    await applyActions(actions, { linear, todoist, metrics });
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
-    expect(todoist.updateProject).toHaveBeenCalledWith('proj-1', {
-      name: '[ENG-1] Fix the flaky login test',
-    });
+    expect(todoist.updateProject).toHaveBeenCalledWith('proj-1', { name: '[ENG-1] New name' });
     expect(await actionCounts(metrics)).toEqual({ project_renamed: 1 });
   });
 
@@ -197,7 +207,7 @@ describe('applyActions', () => {
     const metrics = createMetrics();
     const actions: Action[] = [{ kind: 'reattach_card', issue: issue(), project: project() }];
 
-    await applyActions(actions, { linear, todoist, metrics });
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
     expect(linear.createAttachment).toHaveBeenCalledWith(
       expect.objectContaining({ subtitle: '2 tasks outstanding' }),
@@ -217,7 +227,7 @@ describe('applyActions', () => {
         { kind: 'refresh_card', attachment: staleAttachment, project: project(), issue: issue() },
       ];
 
-      await applyActions(actions, { linear, todoist, metrics });
+      await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
       expect(linear.updateAttachment).toHaveBeenCalledWith('att-1', {
         title: '[ENG-1] Fix the flaky login test',
@@ -238,7 +248,7 @@ describe('applyActions', () => {
         { kind: 'refresh_card', attachment: upToDate, project: project(), issue: issue() },
       ];
 
-      await applyActions(actions, { linear, todoist, metrics });
+      await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
       expect(linear.updateAttachment).not.toHaveBeenCalled();
       expect(await actionCounts(metrics)).toEqual({});
@@ -261,7 +271,7 @@ describe('applyActions', () => {
         { kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' },
       ];
 
-      await applyActions(actions, { linear, todoist, metrics });
+      await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
       expect(todoist.addProjectComment).toHaveBeenCalledWith(
         'proj-1',
@@ -295,7 +305,7 @@ describe('applyActions', () => {
         { kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' },
       ];
 
-      await applyActions(actions, { linear, todoist, metrics });
+      await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
       expect(todoist.addProjectComment).not.toHaveBeenCalled();
       expect(await actionCounts(metrics)).toEqual({
@@ -313,7 +323,7 @@ describe('applyActions', () => {
         { kind: 'archive_project', project: project(), linkedIssueId: 'issue-1' },
       ];
 
-      await applyActions(actions, { linear, todoist, metrics });
+      await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
       expect(linear.updateAttachment).not.toHaveBeenCalled();
       expect(await actionCounts(metrics)).toEqual({
@@ -329,7 +339,7 @@ describe('applyActions', () => {
     const metrics = createMetrics();
     const actions: Action[] = [{ kind: 'mark_lost', project: project() }];
 
-    await applyActions(actions, { linear, todoist, metrics });
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
     expect(todoist.updateProject).toHaveBeenCalledWith('proj-1', {
       name: '[LOST] [ENG-1] Fix the flaky login test',
@@ -344,11 +354,16 @@ describe('applyActions', () => {
     });
     const metrics = createMetrics();
     const actions: Action[] = [
-      { kind: 'rename_project', project: project({ id: 'proj-fail' }), issue: issue() },
+      {
+        kind: 'update_project',
+        project: project({ id: 'proj-fail' }),
+        issue: issue(),
+        name: '[ENG-1] New name',
+      },
       { kind: 'mark_lost', project: project({ id: 'proj-ok' }) },
     ];
 
-    const result = await applyActions(actions, { linear, todoist, metrics });
+    const result = await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
 
     expect(result).toEqual({ succeeded: 1, failed: 1 });
     expect(todoist.updateProject).toHaveBeenCalledTimes(2);
@@ -370,7 +385,12 @@ describe('applyActions', () => {
       const todoist = fakeTodoist();
       const actions: Action[] = [{ kind: 'reattach_card', issue: issue(), project: project() }];
 
-      const result = await applyActions(actions, { linear, todoist, metrics: createMetrics() });
+      const result = await applyActions(actions, {
+        linear,
+        todoist,
+        metrics: createMetrics(),
+        colors: COLORS,
+      });
 
       expect(result).toEqual({ succeeded: 0, failed: 1 });
       expect(logger.error).toHaveBeenCalledWith(
@@ -392,7 +412,12 @@ describe('applyActions', () => {
       });
       const actions: Action[] = [{ kind: 'mark_lost', project: project({ id: 'proj-9' }) }];
 
-      await applyActions(actions, { linear: fakeLinear(), todoist, metrics: createMetrics() });
+      await applyActions(actions, {
+        linear: fakeLinear(),
+        todoist,
+        metrics: createMetrics(),
+        colors: COLORS,
+      });
 
       expect(logger.error).toHaveBeenCalledWith(
         'Failed to apply reconciliation action',
@@ -408,7 +433,12 @@ describe('applyActions', () => {
         { kind: 'archive_project', project: project(), linkedIssueId: 'issue-42' },
       ];
 
-      await applyActions(actions, { linear: fakeLinear(), todoist, metrics: createMetrics() });
+      await applyActions(actions, {
+        linear: fakeLinear(),
+        todoist,
+        metrics: createMetrics(),
+        colors: COLORS,
+      });
 
       expect(logger.error).toHaveBeenCalledWith(
         'Failed to apply reconciliation action',
@@ -442,7 +472,7 @@ describe('applyActions', () => {
 
       await applyActions(
         [{ kind: 'delete_stray_cards', issue: issue(), attachments: [attachment()] }],
-        { linear, todoist, metrics: createMetrics() },
+        { linear, todoist, metrics: createMetrics(), colors: COLORS },
       );
 
       expect(todoist.archiveProject).not.toHaveBeenCalled();
@@ -474,7 +504,12 @@ describe('applyActions', () => {
         ]),
       });
 
-      await applyActions([archive()], { linear, todoist, metrics: createMetrics() });
+      await applyActions([archive()], {
+        linear,
+        todoist,
+        metrics: createMetrics(),
+        colors: COLORS,
+      });
 
       const body = vi.mocked(linear.createComment).mock.calls[0]?.[1] ?? '';
       expect(body).toContain('Finished on the last day');
@@ -489,7 +524,12 @@ describe('applyActions', () => {
           .mockResolvedValue({ tasks: [task({ content: 'Never finished' })], sections: [] }),
       });
 
-      await applyActions([archive()], { linear, todoist, metrics: createMetrics() });
+      await applyActions([archive()], {
+        linear,
+        todoist,
+        metrics: createMetrics(),
+        colors: COLORS,
+      });
 
       expect(vi.mocked(linear.createComment).mock.calls[0]?.[1]).toContain('Never finished');
     });
@@ -537,9 +577,105 @@ describe('applyActions', () => {
         createComment: vi.fn().mockImplementation(async () => void order.push('comment')),
       });
 
-      await applyActions([archive()], { linear, todoist, metrics: createMetrics() });
+      await applyActions([archive()], {
+        linear,
+        todoist,
+        metrics: createMetrics(),
+        colors: COLORS,
+      });
 
       expect(order).toEqual(['archive', 'comment']);
     });
+  });
+});
+
+describe('applyActions - project colours (colors design §5)', () => {
+  it('sends one updateProject call carrying both fields, and counts each separately', async () => {
+    // `project_renamed` keeps meaning a rename rather than becoming "something changed", so
+    // the existing metric and any dashboard on it stay valid.
+    const linear = fakeLinear();
+    const todoist = fakeTodoist();
+    const metrics = createMetrics();
+    const actions: Action[] = [
+      {
+        kind: 'update_project',
+        project: project(),
+        issue: issue(),
+        name: '[ENG-1] New name',
+        color: 'grape',
+      },
+    ];
+
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
+
+    expect(todoist.updateProject).toHaveBeenCalledTimes(1);
+    expect(todoist.updateProject).toHaveBeenCalledWith('proj-1', {
+      name: '[ENG-1] New name',
+      color: 'grape',
+    });
+    expect(await actionCounts(metrics)).toEqual({ project_renamed: 1, project_recolored: 1 });
+  });
+
+  it('omits an unchanged field rather than sending it as undefined', async () => {
+    const linear = fakeLinear();
+    const todoist = fakeTodoist();
+    const metrics = createMetrics();
+    const actions: Action[] = [
+      { kind: 'update_project', project: project(), issue: issue(), color: 'grape' },
+    ];
+
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
+
+    // Exactly `{ color }` - an explicit `name: undefined` would be a different call shape and
+    // risks an SDK sending it as a null name.
+    expect(todoist.updateProject).toHaveBeenCalledWith('proj-1', { color: 'grape' });
+    expect(await actionCounts(metrics)).toEqual({ project_recolored: 1 });
+  });
+
+  it('creates a project with the default colour when the issue is in an unmapped state', async () => {
+    const linear = fakeLinear();
+    const todoist = fakeTodoist({ createProject: vi.fn().mockResolvedValue(project()) });
+    const metrics = createMetrics();
+    const actions: Action[] = [{ kind: 'create_project', issue: issue({ stateName: 'Blocked' }) }];
+
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
+
+    expect(todoist.createProject).toHaveBeenCalledWith(
+      expect.objectContaining({ color: 'charcoal' }),
+    );
+  });
+
+  it('colours a recreated project from the issue state too', async () => {
+    const linear = fakeLinear();
+    const todoist = fakeTodoist({ createProject: vi.fn().mockResolvedValue(project()) });
+    const metrics = createMetrics();
+    const actions: Action[] = [
+      { kind: 'recreate_project', issue: issue(), previousProjectUrl: 'https://todoist.com/x' },
+    ];
+
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
+
+    expect(todoist.createProject).toHaveBeenCalledWith(expect.objectContaining({ color: 'blue' }));
+  });
+
+  it('leaves the colour untouched when archiving, so the closing state stays on the record', async () => {
+    const linear = fakeLinear();
+    const todoist = fakeTodoist();
+    const metrics = createMetrics();
+    const actions: Action[] = [
+      {
+        kind: 'archive_project',
+        project: project(),
+        linkedIssueId: 'issue-1',
+        displacedCard: null,
+      },
+    ];
+
+    await applyActions(actions, { linear, todoist, metrics, colors: COLORS });
+
+    expect(todoist.archiveProject).toHaveBeenCalledWith('proj-1');
+    for (const call of vi.mocked(todoist.updateProject).mock.calls) {
+      expect(call[1]).not.toHaveProperty('color');
+    }
   });
 });
