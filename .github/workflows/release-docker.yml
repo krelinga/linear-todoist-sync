@@ -103,9 +103,11 @@ jobs:
             exit 1
           fi
 
-          # Annotated, matching v1.0.0 and v1.1.0, which npm version created.
+          # Annotated with the bare version as its message, matching every existing tag -
+          # that is the shape `npm version` produces, and the backfilled v1.2.0..v1.5.0 were
+          # created to match it too.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$TAG"
+          git tag -a "$TAG" -m "${TAG#v}"
           git push origin "$TAG"
           echo "Tagged $GITHUB_SHA as $TAG."
