@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # `contents: write` is needed only to push the release tag in the final step. Tagging used to
+  # be a manual step in the README and was missed on every release from 1.2.0 to 1.5.0 - ten of
+  # them - which is why it now lives here, in the one place that knows a release actually
+  # happened.
+  contents: write
   packages: write
 
 jobs:
@@ -54,3 +58,54 @@ jobs:
             org.opencontainers.image.version=${{ steps.version.outputs.full }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # Deliberately after the push: the tag asserts "this commit was released", so it must not
+      # exist if the build or push failed. The opposite failure - image pushed, tagging failed -
+      # is the recoverable one, since re-running this workflow is a no-op up to here and the
+      # step below is idempotent.
+      - name: Tag the released commit
+        env:
+          TAG: v${{ steps.version.outputs.full }}
+        run: |
+          set -euo pipefail
+
+          # Two details here, both verified against a real annotated tag rather than assumed.
+          #
+          # `git ls-remote` reports the *tag object* SHA for an annotated tag, not the commit it
+          # points at; the commit is on the peeled `^{}` line. The tags this repo already has
+          # are annotated, so comparing against the unpeeled SHA would never match and every
+          # legitimate re-run would look like a version collision.
+          #
+          # And the `^{}` pattern has to be asked for explicitly: ls-remote matches patterns
+          # against ref names, and `refs/tags/X^{}` does not match the pattern `refs/tags/X`,
+          # so filtering by the exact ref silently drops the only line carrying the commit.
+          #
+          # Not guarded with `|| true`: ls-remote exits non-zero only when it could not reach
+          # the remote, and swallowing that would turn an auth or network failure into a
+          # confident "this tag does not exist yet".
+          refs=$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")
+          existing=$(printf '%s\n' "$refs" | awk -v t="refs/tags/$TAG^{}" '$2 == t { print $1 }')
+          if [ -z "$existing" ]; then
+            existing=$(printf '%s\n' "$refs" | awk -v t="refs/tags/$TAG" '$2 == t { print $1 }')
+          fi
+
+          if [ -n "$existing" ]; then
+            if [ "$existing" = "$GITHUB_SHA" ]; then
+              echo "$TAG already points at $GITHUB_SHA - nothing to do."
+              exit 0
+            fi
+            # This workflow builds whatever is on the default branch when it is dispatched, not
+            # the commit that bumped the version, so re-running it after main has moved on would
+            # otherwise overwrite :$TAG in GHCR with different code and say nothing. The image
+            # tags are already overwritten by the time we get here; failing loudly is what makes
+            # that visible instead of silent.
+            echo "::error::$TAG already exists at ${existing:0:7} but this run built ${GITHUB_SHA:0:7}. Bump the version in package.json rather than releasing different code under the same tag."
+            exit 1
+          fi
+
+          # Annotated, matching v1.0.0 and v1.1.0, which npm version created.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          echo "Tagged $GITHUB_SHA as $TAG."

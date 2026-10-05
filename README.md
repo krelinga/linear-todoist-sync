@@ -254,9 +254,10 @@ shell first (as above), same as any other env var.
 ## Release
 
 ```sh
-npm version <newversion>   # e.g. npm version minor - bumps package.json and
-                            # package-lock.json together, commits, and tags
-git push && git push --tags
+npm version <newversion> --no-git-tag-version   # e.g. minor - bumps package.json
+                                                 # and package-lock.json together
+git commit -am "<newversion>"
+git push
 ```
 
 Then run the **Release Docker image** workflow from the repo's Actions tab
@@ -266,9 +267,23 @@ run automatically on push or tag - see
 It builds the image and pushes it to GitHub Container Registry at
 `ghcr.io/krelinga/linear-todoist-sync`, tagged with the `major`,
 `major.minor`, and `major.minor.patch` versions read from `package.json` at
-run time (e.g. `:0`, `:0.1`, `:0.1.0`), plus `:latest` - so it always
+run time (e.g. `:1`, `:1.5`, `:1.5.0`), plus `:latest` - so it always
 reflects whatever version is on `main` when you run it, not the commit that
 triggered it.
+
+**The git tag is created by that workflow, not by you** — hence
+`--no-git-tag-version` above, and no `git push --tags`. The workflow tags the
+commit it actually built, as an annotated `v<version>`, after the image push
+succeeds. Tagging used to be a manual step here and was missed on every release
+from 1.2.0 through 1.5.0, which is why it moved into the one place that knows a
+release really happened.
+
+Re-running the workflow without bumping the version is safe but strict: if
+`v<version>` already points at the commit being built it does nothing, and if it
+points at a *different* commit the run **fails**. That is deliberate — because
+the workflow builds whatever is on `main` at dispatch time, re-running it after
+`main` has moved on would otherwise overwrite `:<version>` in GHCR with
+different code and say nothing about it.
 
 ## Observability
 
