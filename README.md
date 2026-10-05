@@ -59,6 +59,8 @@ Copy `.env.example` to `.env` and fill in both API tokens:
 | `DIGEST_TIME` | no | `07:00` | Local time (24-hour `HH:MM`) the daily digest comment runs |
 | `DIGEST_TIMEZONE` | no | `UTC` | IANA time zone `DIGEST_TIME` is interpreted in |
 | `METRICS_PORT` | no | `9464` | Port serving Prometheus-format metrics at `/metrics` |
+| `LINEAR_STATE_COLORS` | no | - | `State Name=color` pairs, comma separated, giving each in-progress Linear state its own Todoist project colour. Empty ⇒ no colouring; see [Project colours](#project-colours) |
+| `LINEAR_STATE_COLOR_DEFAULT` | no | `charcoal` | Colour for an in-progress state `LINEAR_STATE_COLORS` does not mention |
 | `LINEAR_WEBHOOK_SECRET` | no | - | Signing secret from Linear. Unset ⇒ poll-only mode; see [Webhooks](#webhooks-optional) |
 | `WEBHOOK_PORT` | no | `9465` | Port the webhook receiver listens on. Must differ from `METRICS_PORT` |
 | `WEBHOOK_PATH` | no | `/webhooks/linear` | Path the receiver answers on |
@@ -72,6 +74,66 @@ believed the receiver was running when it was not.
 changes how a log timestamp is *printed*; `DIGEST_TIMEZONE` decides when the
 digest actually runs. Set both to your own zone in a typical single-user
 deployment, but changing one is never meant to move the other.
+
+### Project colours
+
+Linear's "in progress" category is usually more than one state — `In Progress`,
+`In Review`, `Blocked` — and by default every mirrored project looks the same in
+Todoist's sidebar. Map each state to a colour and the sidebar becomes a status
+board:
+
+```
+LINEAR_STATE_COLORS="In Progress=blue,In Review=grape,Blocked=red"
+LINEAR_STATE_COLOR_DEFAULT=charcoal
+```
+
+Only states in the **started** category are colourable; an issue outside it has
+no active project to colour.
+
+Colours come from Todoist's fixed palette, and an unrecognised one is a startup
+error listing the valid keys:
+
+```
+berry_red    lime_green   light_blue   magenta
+red          green        blue         salmon
+orange       mint_green   grape        charcoal
+yellow       teal         violet       grey
+olive_green  sky_blue     lavender     taupe
+```
+
+Details worth knowing:
+
+- **State names match case-insensitively**, trimmed, against Linear's own names,
+  so you need not reproduce Linear's capitalisation. Two teams that both call a
+  state `In Progress` share one entry.
+- **Each pair splits on its last `=`**, so a state name may contain one. A state
+  name containing a comma cannot be expressed; such a name simply never matches
+  and shows up as unmapped (below).
+- **Leaving `LINEAR_STATE_COLORS` empty is a real off switch**, not an error —
+  every project then takes the default and nothing is recoloured.
+- **A duplicate state name is a startup error** rather than last-one-wins, since
+  two entries for one state disagree about intent.
+- **Linear wins.** Recolour a mirrored project by hand in Todoist and the next
+  poll puts it back — the same rule that already applies to the project's name.
+  That is what makes a state change actually move the colour.
+- **Colour is frozen on archive.** When an issue leaves "in progress" its project
+  keeps whatever colour it had, so the archive records which state work stopped
+  in.
+
+**State names are not checked against Linear at startup.** A name you mistype,
+or a state renamed in Linear afterwards, is not a boot error — the affected
+projects quietly take the default colour instead. What surfaces it is the
+`sync_state_color_unmapped` metric and a `warn` log line naming the state:
+
+```json
+{"level":"warn","message":"Started states have no configured Todoist color; using the default","states":["Blocked"],"issues":1,"defaultColor":"charcoal"}
+```
+
+A rename, a newly added state and a typo all appear the same way, because all
+three mean "Linear is using a state name the config does not mention". See
+[Observability](#observability) for the alert, and
+[`docs/design/project-colors-design.md`](docs/design/project-colors-design.md)
+for why there is no startup check.
 
 ### Log format
 
@@ -115,10 +177,16 @@ gauges — stays UTC regardless of `TZ`.
 docker compose up --build -d
 ```
 
-Reads `LINEAR_API_KEY` and `TODOIST_API_TOKEN` from a `.env` file in this
-directory automatically (that's a Docker Compose feature, not something this
-app does itself) - `docker-compose.yml` already sets the other variables. No
-volumes are mounted; there's no local state that needs to survive a restart.
+Reads `LINEAR_API_KEY`, `TODOIST_API_TOKEN`, `LINEAR_STATE_COLORS` and
+`LINEAR_STATE_COLOR_DEFAULT` from a `.env` file in this directory automatically
+(that's a Docker Compose feature, not something this app does itself) -
+`docker-compose.yml` sets the remaining variables inline. No volumes are
+mounted; there's no local state that needs to survive a restart.
+
+Note that Compose only passes through the variables it names, so a variable
+added to `.env` but absent from `docker-compose.yml` reaches the container as
+nothing at all. The four above are wired up; anything new needs adding to both
+compose files.
 
 ## Webhooks (optional)
 
@@ -211,4 +279,23 @@ worth alerting on is poll staleness:
 time() - sync_last_poll_success_timestamp_seconds > 300
 ```
 
-See §8 of the design doc for the full metric list.
+A second, **warning**-severity rule catches a state colour config that has
+drifted away from Linear (see [Project colours](#project-colours)). Nothing is
+at risk when it fires — reconciliation is still correct and only the colours are
+wrong — so it should never page:
+
+```
+max by (state) (max_over_time(sync_state_color_unmapped[15m])) > 0
+```
+
+The `state` label is the current Linear name, so the alert names the state to
+add to `LINEAR_STATE_COLORS`. The series is absent when nothing is unmapped, and
+deliberately has no `or vector(0)` fallback: absence also means the container is
+down, which the staleness rule above already covers.
+
+`sync_state_colors_configured` reports how many entries the running container
+parsed — worth comparing against what you expect after a deploy, since it is
+otherwise only answerable by `exec`ing into the container.
+
+See §8 of the design doc for the full metric list, and §6 of the project-colours
+design doc for the alert's full rationale.

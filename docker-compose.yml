@@ -15,5 +15,10 @@ services:
       DIGEST_TIME: "07:00"
       DIGEST_TIMEZONE: "America/Chicago"
       METRICS_PORT: 9464
+      # Per-state Todoist project colours, e.g. "In Progress=blue,In Review=grape". Read from
+      # .env so state names can be changed without editing this file. Empty is a valid "off":
+      # every project then takes the default below, which is the pre-1.5.0 behaviour.
+      LINEAR_STATE_COLORS: ${LINEAR_STATE_COLORS:-}
+      LINEAR_STATE_COLOR_DEFAULT: ${LINEAR_STATE_COLOR_DEFAULT:-charcoal}
     ports:
       - "9464:9464"

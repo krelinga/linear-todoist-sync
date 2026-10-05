@@ -66,6 +66,10 @@ services:
       DIGEST_TIME: "07:00"
       DIGEST_TIMEZONE: "America/Chicago"
       METRICS_PORT: 9464
+      # Per-state Todoist project colours - see docker-compose.yml. Read from .env rather than
+      # set here, so the two topologies cannot drift apart on this.
+      LINEAR_STATE_COLORS: ${LINEAR_STATE_COLORS:-}
+      LINEAR_STATE_COLOR_DEFAULT: ${LINEAR_STATE_COLOR_DEFAULT:-charcoal}
 
 volumes:
   tailscale-state:
